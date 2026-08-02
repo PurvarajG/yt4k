@@ -15,15 +15,17 @@ press enter, repeat. Press [s] to change resolution / codec / audio format,
 Plain English works too, on the command line or in the paste box:
 
     yt4k URL 1:20 to 3:45            # export only that slice
+    yt4k URL 12:00 to the end        # and 'start to 4:05' for the opening
     yt4k URL first 30s in 1080p mp4
     yt4k URL just the audio as mp3 320k
-    yt4k URL 2:10-4:05 h265 small file
+    yt4k URL 2:10-4:05 h265 small file -o ~/Desktop
 
 Requires: yt-dlp and ffmpeg on PATH.
     brew install yt-dlp ffmpeg      # macOS
 
 Downloads land in ~/Downloads/YouTube 4K by default (created if missing).
-Settings persist in ~/.config/yt4k/config.json.
+Press [f] — or pass -o DIR — to send just this session somewhere else without
+touching that default. Settings persist in ~/.config/yt4k/config.json.
 """
 
 import argparse
@@ -240,7 +242,23 @@ DEFAULTS = {
     "keep_source": False,
     "clip_precise": True,
     "output_dir": DEFAULT_OUTPUT_DIR,
+    "recent_dirs": [],
 }
+
+# Where this run writes, when it isn't the saved default. Set by -o or by the
+# folder picker; deliberately never persisted, so a one-off destination can't
+# quietly become the permanent one.
+SESSION_DIR: str | None = None
+
+
+def active_dir(s: dict) -> Path:
+    return Path(SESSION_DIR or s["output_dir"]).expanduser()
+
+
+def remember_dir(s: dict, path: str) -> None:
+    recent = [d for d in s.get("recent_dirs") or [] if d != path]
+    s["recent_dirs"] = ([path] + recent)[:6]
+    save_settings(s)
 
 
 def load_settings() -> dict:
@@ -315,6 +333,13 @@ _TS = (rf"(?:{_CLOCK_RE.pattern}|(?:{_UNIT_PART})(?:\s*{_UNIT_PART})*"
 
 _SEP = r"(?:to|until|till|through|thru|->|-->|–|—|→|\.\.+|-)"
 
+# "from the start to 4:05" / "2:10 till the end" — the two edges of a video
+# said in words instead of digits.
+_AT_START = r"(?:the\s+)?(?:start|beginning|begin|top)"
+_AT_END = r"(?:the\s+)?(?:end|ending|finish|last\s+frame)"
+_FROM = rf"(?:{_TS}|{_AT_START})"
+_TO = rf"(?:{_TS}|{_AT_END})"
+
 
 def parse_timestamp(text: str) -> float | None:
     """'1:20' / '0:01:20' / '1m20s' / '90s' / '90' → seconds."""
@@ -384,10 +409,11 @@ class Clip:
         return f"{human_time(self.start or 0)} → {human_time(self.end)}"
 
 
-def clip_tag(start: float, end: float | None) -> str:
+def clip_tag(start: float, end: float | None, to_end: bool = False) -> str:
     """The '(1m20s-3m45s)' suffix added to a clipped file's name."""
-    return f"{stamp(start)}-{stamp(end)}" if end is not None \
-        else f"{stamp(start)}-end"
+    if to_end or end is None:
+        return f"{stamp(start)}-end"
+    return f"{stamp(start)}-{stamp(end)}"
 
 
 def clip_section(start: float, end: float | None) -> str:
@@ -395,8 +421,22 @@ def clip_section(start: float, end: float | None) -> str:
     return f"*{start:.3f}-{'inf' if end is None else f'{end:.3f}'}"
 
 
+EDGE_START = "start"       # sentinels an edge word resolves to
+EDGE_END = "end"
+
+
+def parse_edge(text: str) -> float | str | None:
+    """One end of a range: a timestamp, or the word for the video's own edge."""
+    t = text.strip().lower()
+    if re.fullmatch(_AT_START, t, re.I):
+        return EDGE_START
+    if re.fullmatch(_AT_END, t, re.I):
+        return EDGE_END
+    return parse_timestamp(t)
+
+
 _RANGE_RULES = [
-    ("range", re.compile(rf"\b(?:from\s+)?({_TS})\s*{_SEP}\s*({_TS})", re.I)),
+    ("range", re.compile(rf"\b(?:from\s+)?({_FROM})\s*{_SEP}\s*({_TO})", re.I)),
     ("first", re.compile(rf"\bfirst\s+({_TS})", re.I)),
     ("tail", re.compile(rf"\blast\s+({_TS})", re.I)),
     ("start", re.compile(rf"\b(?:from|after|start(?:ing)?(?:\s+(?:at|from))?)"
@@ -412,12 +452,20 @@ def parse_clip(text: str) -> tuple[Clip | None, str]:
         m = rx.search(text)
         if not m:
             continue
-        times = [parse_timestamp(g) for g in m.groups()]
+        times = [parse_edge(g) if kind == "range" else parse_timestamp(g)
+                 for g in m.groups()]
         if any(t is None for t in times):
             continue
         rest = (text[:m.start()] + " " + text[m.end():])
         if kind == "range":
-            return Clip(start=times[0], end=times[1]), rest
+            if times[0] == EDGE_END or times[1] == EDGE_START:
+                continue                 # "end to 3:00" isn't a range
+            # "the start" is 0:00; "the end" is an open-ended clip.
+            start = 0.0 if times[0] == EDGE_START else times[0]
+            end = None if times[1] == EDGE_END else times[1]
+            if not start and end is None:
+                return None, rest        # "start to end" is the whole video
+            return Clip(start=start, end=end), rest
         if kind == "first":
             return Clip(start=0.0, end=times[0]), rest
         if kind == "tail":
@@ -767,7 +815,7 @@ def run_job(url: str, s: dict, clip: Clip | None = None) -> Path:
     require("ffmpeg")
     require("ffprobe")
 
-    out_dir = Path(s["output_dir"]).expanduser().resolve()
+    out_dir = active_dir(s).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     started = time.time()
@@ -789,12 +837,17 @@ def run_job(url: str, s: dict, clip: Clip | None = None) -> Path:
     cut = None
     if clip:
         start, end = clip.resolve(dur)
-        cut = (start, end)
+        # ffmpeg chokes on an open-ended section, and we already know how long
+        # the video is — so "to the end" becomes a real timestamp here.
+        to_end = end is None
+        if to_end and dur:
+            end = dur
+        cut = (start, end, to_end)
         span = (end - start) if end is not None else (
             (dur - start) if dur else None)
         length = f"  ({human_time(span)})" if span else ""
         print(f"  {C.cyan}✂ clip{C.reset}  {C.bold}{human_time(start)} → "
-              f"{human_time(end) if end is not None else 'end'}{C.reset}"
+              f"{'end' if to_end else human_time(end)}{C.reset}"
               f"{C.grey}{length}{C.reset}")
         dur = span or dur
     print()
@@ -833,15 +886,17 @@ def unique(path: Path) -> Path:
 
 
 def fetch_maybe_clipped(url: str, workdir: Path, fmt: str, merge: str | None,
-                        s: dict, cut: tuple[float, float | None] | None) -> Path:
+                        s: dict, cut: tuple[float, float | None, bool] | None) -> Path:
     """Download, slicing server-side when yt-dlp can do it for us."""
     if not cut:
         return yt_dlp_fetch(url, workdir, fmt, merge)
-    start, end = cut
+    start, end, _ = cut
     if supports_sections():
+        # An open end (only when the video's length is unknown) can't be
+        # keyframe-cut — ffmpeg won't take '-to inf'.
         return yt_dlp_fetch(url, workdir, fmt, merge,
                             section=clip_section(start, end),
-                            precise=bool(s["clip_precise"]))
+                            precise=bool(s["clip_precise"]) and end is not None)
     print(f"  {C.yellow}!{C.reset} {C.grey}this yt-dlp can't download a "
           f"section — fetching the whole video, then trimming{C.reset}")
     return trim_local(yt_dlp_fetch(url, workdir, fmt, merge), start, end)
@@ -849,7 +904,7 @@ def fetch_maybe_clipped(url: str, workdir: Path, fmt: str, merge: str | None,
 
 def video_job(url: str, workdir: Path, out_dir: Path, s: dict,
               dur: float | None,
-              cut: tuple[float, float | None] | None = None) -> Path:
+              cut: tuple[float, float | None, bool] | None = None) -> Path:
     fmt = build_video_format(int(s["res"]), s["codec"])
     src = fetch_maybe_clipped(url, workdir, fmt, "mkv", s, cut)
 
@@ -893,7 +948,7 @@ def video_job(url: str, workdir: Path, out_dir: Path, s: dict,
 
 def audio_job(url: str, workdir: Path, out_dir: Path, s: dict,
               dur: float | None,
-              cut: tuple[float, float | None] | None = None) -> Path:
+              cut: tuple[float, float | None, bool] | None = None) -> Path:
     src = fetch_maybe_clipped(url, workdir, "bestaudio/best", None, s, cut)
     info = probe(src)
     duration = info.get("duration") or dur
@@ -1034,9 +1089,9 @@ SAMPLE_URL = "https://youtu.be/dQw4w9WgXcQ"
 # the syntax is only useful if you never have to go looking for it.
 EXAMPLES = [
     ("youtu.be/…  2:10 to 4:05", "exports only that slice"),
-    ("youtu.be/…  first 30s in 1080p mp4", "a clip, in the format you want"),
+    ("youtu.be/…  12:00 to the end in 1080p", "or 'start to 4:05' for the open"),
     ("youtu.be/…  just the audio as mp3 320k", "audio only, in plain English"),
-    ("youtu.be/…  from 12:00 h265 small file", "12:00 to the end, re-encoded"),
+    ("youtu.be/…  first 30s h265 small file", "a clip, in the format you want"),
 ]
 
 PLACEHOLDER = f"paste a link…   e.g.  {SAMPLE_URL}  2:10 to 4:05  1080p mp4"
@@ -1048,7 +1103,9 @@ def home(s: dict, note: str = "", recent: list[str] | None = None) -> None:
     print(f"  {C.red}DOWNLOAD DESK{C.reset}")
     print(f"  {C.bold}Idle — downloader ready{C.reset}  "
           f"{C.dim}Paste a YouTube link to begin.{C.reset}")
-    print(f"  {C.dim}OUTPUT{C.reset}  {tilde(Path(s['output_dir']).expanduser())}")
+    scope = (f"  {C.cyan}this session{C.reset}" if SESSION_DIR else
+             f"  {C.dim}[f] to change{C.reset}")
+    print(f"  {C.dim}OUTPUT{C.reset}  {tilde(active_dir(s))}{scope}")
     print(f"  {rule()}")
     print()
     count = len(recent or [])
@@ -1077,7 +1134,8 @@ def home(s: dict, note: str = "", recent: list[str] | None = None) -> None:
     audio = f"{C.red}{C.bold}[AUDIO ONLY]{C.reset}" if s["mode"] == "audio" else f"{C.dim}AUDIO ONLY{C.reset}"
     print(f"  {C.dim}QUALITY{C.reset}  {quality}    {C.dim}FORMAT{C.reset}  {video}  {audio}")
     print(f"  {rule()}")
-    print(f"  {C.dim}[s]{C.reset} settings  {C.dim}[o]{C.reset} folder  {C.dim}[:]{C.reset} commands  "
+    print(f"  {C.dim}[s]{C.reset} settings  {C.dim}[f]{C.reset} save to  "
+          f"{C.dim}[o]{C.reset} open folder  {C.dim}[:]{C.reset} commands  "
           f"{C.dim}[?]{C.reset} help  {C.dim}[esc]{C.reset} quit")
 
 
@@ -1091,6 +1149,7 @@ def help_screen() -> None:
         ("1 / 2 / 3", "use 4K, 1440p, or 1080p for new downloads"),
         ("v / a", "switch between video and audio-only mode"),
         ("s", "settings — resolution, codec, audio format, folder"),
+        ("f", "pick where this session saves — enter for now, d for always"),
         ("o", "open the download folder in Finder"),
         (":", "open the command palette"),
         ("h", "this screen"),
@@ -1107,8 +1166,8 @@ def help_screen() -> None:
     for syntax, means in (
         ("2:10 to 4:05  ·  2:10-4:05", "from 2:10 until 4:05"),
         ("1h02m to 1h05m30s", "hours / minutes / seconds spelled out"),
-        ("from 12:00", "12:00 through to the end"),
-        ("until 0:45", "the opening, up to 0:45"),
+        ("2:10 to the end  ·  from 12:00", "that point through to the end"),
+        ("start to 4:05  ·  until 0:45", "the beginning up to that point"),
         ("first 30s  ·  last 90s", "relative to the start or the end"),
         ("90 to 225", "bare numbers are seconds"),
     ):
@@ -1141,6 +1200,7 @@ def command_palette() -> str:
     print(f"  {C.red}COMMAND PALETTE{C.reset}  {C.dim}press a key to run an action{C.reset}\n")
     commands = [
         ("s", "Settings", "quality, format, encoder, destination"),
+        ("f", "Save to", "pick the folder for this session"),
         ("o", "Reveal folder", "open completed downloads in Finder"),
         ("1 / 2 / 3", "Quality", "4K, 1440p, or 1080p for new downloads"),
         ("v / a", "Format", "video or audio-only for new downloads"),
@@ -1238,6 +1298,7 @@ def cycle_field(draft: dict, key: str, step: int) -> None:
 
 def settings_screen(s: dict) -> dict:
     """Arrow-key settings page. Returns the (possibly edited) settings."""
+    global SESSION_DIR
     draft = dict(s)
 
     def rows():
@@ -1302,22 +1363,109 @@ def settings_screen(s: dict) -> dict:
             cycle_field(draft, table[cur][0], -1 if k == "left" else 1)
         elif k == "enter":
             if table[cur][0] == "output_dir":
-                keys.restore()              # cooked mode so input() can edit
-                sys.stdout.write("\033[?25h")
-                print(f"  {C.cyan}folder ›{C.reset} ", end="", flush=True)
-                try:
-                    raw = input().strip()
-                except (EOFError, KeyboardInterrupt):
-                    raw = ""
+                raw = ask_path("folder", keys)
                 if raw:
-                    draft["output_dir"] = raw.replace("\\ ", " ").strip("'\"")
-                keys.resume()
-                sys.stdout.write("\033[?25l")
+                    draft["output_dir"] = raw
                 continue
+            if draft["output_dir"] != s["output_dir"]:
+                # Changing the default here means it, so drop any session
+                # override that would otherwise keep winning.
+                SESSION_DIR = None
+                remember_dir(draft, draft["output_dir"])
             save_settings(draft)
             return draft
         elif k in ("esc", "q", "ctrl-d"):
             return s
+
+
+def ask_path(prompt: str, keys: KeyMode) -> str:
+    """Read a pasted or typed path in cooked mode, so editing behaves."""
+    keys.restore()
+    sys.stdout.write("\033[?25h")
+    print(f"  {C.cyan}{prompt} ›{C.reset} ", end="", flush=True)
+    try:
+        raw = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+    keys.resume()
+    sys.stdout.write("\033[?25l")
+    # Drag-and-drop from Finder arrives shell-escaped and sometimes quoted.
+    return raw.replace("\\ ", " ").strip("'\"")
+
+
+def folder_screen(s: dict) -> str | None:
+    """Pick where this session's downloads land.
+
+    Enter uses the folder for this session only; [d] also makes it the saved
+    default. Returns a note for the home screen, or None if nothing changed.
+    """
+    global SESSION_DIR
+    cur = 0
+    keys = KeyMode()
+    with keys:
+        while True:
+            default = s["output_dir"]
+            recent = [d for d in (s.get("recent_dirs") or []) if d != default]
+            rows = ([(default, "default")]
+                    + [(d, "recent") for d in recent]
+                    + [(None, "")])
+            cur = min(cur, len(rows) - 1)
+            clear()
+            banner()
+            print(f"  {C.red}DOWNLOAD FOLDER{C.reset}  "
+                  f"{C.dim}where this session's files land{C.reset}")
+            print(f"  {C.grey}↑↓ move    enter use for this session    "
+                  f"d also save as default    esc cancel{C.reset}\n")
+            active = str(active_dir(s))
+            for i, (path, tag) in enumerate(rows):
+                marker = f"{C.cyan}›{C.reset}" if i == cur else " "
+                if path is None:
+                    label, note = "type or paste a path…", ""
+                else:
+                    label = tilde(Path(path).expanduser())
+                    note = tag
+                    if str(Path(path).expanduser()) == active:
+                        note = f"{tag} · in use now" if tag else "in use now"
+                if i == cur:
+                    print(f"  {marker} {C.bold}{label:<44}{C.reset}"
+                          f"{C.grey}{note}{C.reset}")
+                else:
+                    print(f"  {marker} {C.grey}{label:<44}{note}{C.reset}")
+            if SESSION_DIR:
+                print(f"\n  {C.dim}this session is writing to{C.reset} "
+                      f"{tilde(Path(SESSION_DIR).expanduser())}"
+                      f"{C.grey}, not the default{C.reset}")
+            print()
+
+            k = read_key()
+            if k == "up":
+                cur = (cur - 1) % len(rows)
+            elif k == "down":
+                cur = (cur + 1) % len(rows)
+            elif k in ("enter", "d"):
+                chosen = rows[cur][0]
+                if chosen is None:
+                    chosen = ask_path("folder", keys)
+                    if not chosen:
+                        continue
+                path = Path(chosen).expanduser()
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    print(f"  {C.red}!{C.reset} can't use that folder: {e}")
+                    read_key()
+                    continue
+                SESSION_DIR = None if k == "d" else chosen
+                if k == "d":
+                    s["output_dir"] = chosen
+                remember_dir(s, chosen)
+                where = tilde(path)
+                return (f"{C.green}✓{C.reset} saving to {where} "
+                        f"{C.grey}(default from now on){C.reset}" if k == "d"
+                        else f"{C.green}✓{C.reset} saving to {where} "
+                             f"{C.grey}(this session){C.reset}")
+            elif k in ("esc", "q", "ctrl-d"):
+                return None
 
 
 def quick_job_screen(s: dict, count: int, clip: Clip | None = None,
@@ -1406,7 +1554,7 @@ def quick_job_screen(s: dict, count: int, clip: Clip | None = None,
 # --------------------------------------------------------------------- shell
 
 def open_folder(s: dict) -> None:
-    path = Path(s["output_dir"]).expanduser()
+    path = active_dir(s)
     path.mkdir(parents=True, exist_ok=True)
     opener = "open" if sys.platform == "darwin" else "xdg-open"
     if shutil.which(opener):
@@ -1462,9 +1610,12 @@ def interactive() -> None:
         if cmd in ("h", "help", "?"):
             help_screen()
             continue
+        if cmd in ("f", "folder", "save to", "saveto"):
+            note = folder_screen(s) or f"{C.grey}folder unchanged{C.reset}"
+            continue
         if cmd in ("o", "open"):
             open_folder(s)
-            note = f"{C.grey}opened {tilde(Path(s['output_dir']).expanduser())}{C.reset}"
+            note = f"{C.grey}opened {tilde(active_dir(s))}{C.reset}"
             continue
 
         urls, wanted, clip, chips = parse_request(raw, s)
@@ -1516,7 +1667,7 @@ def interactive() -> None:
 # ---------------------------------------------------------------------- main
 
 def main() -> None:
-    global VERBOSE
+    global VERBOSE, SESSION_DIR
 
     s = load_settings()
     p = argparse.ArgumentParser(
@@ -1532,8 +1683,9 @@ def main() -> None:
                         "--clip 'from 12:00', --clip 'last 90s'")
     p.add_argument("--explain", action="store_true",
                    help="show how the request was understood, download nothing")
-    p.add_argument("-o", "--output-dir", help=f"where to write the file "
-                                              f"(default: {s['output_dir']})")
+    p.add_argument("-o", "--output-dir",
+                   help=f"where to write this run's files, without changing "
+                        f"the saved default ({s['output_dir']})")
     p.add_argument("--res", type=int, choices=[r[0] for r in RESOLUTIONS],
                    help="max vertical resolution (0 = best available)")
     p.add_argument("--codec", choices=[c[0] for c in VIDEO_CODECS],
@@ -1577,10 +1729,12 @@ def main() -> None:
     for key, val in (("res", args.res), ("codec", args.codec),
                      ("container", args.container), ("crf", args.crf),
                      ("preset", args.preset),
-                     ("audio_bitrate", args.audio_bitrate),
-                     ("output_dir", args.output_dir)):
+                     ("audio_bitrate", args.audio_bitrate)):
         if val is not None:
             s[key] = val
+    if args.output_dir:
+        # For this run (or this interactive session) only — never persisted.
+        SESSION_DIR = args.output_dir.replace("\\ ", " ").strip("'\"")
     if args.audio:
         s["mode"], s["audio_format"] = "audio", args.audio
     if args.fast:
@@ -1593,6 +1747,8 @@ def main() -> None:
         print(f"    links     {', '.join(urls) or '(none)'}")
         print(f"    clip      {clip.label() if clip else '(whole video)'}")
         print(f"    settings  {summary(s)}")
+        print(f"    folder    {tilde(active_dir(s))}"
+              f"{'  (this run only)' if SESSION_DIR else ''}")
         if chips:
             print(f"    words     {' · '.join(chips)}")
         return

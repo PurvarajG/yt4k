@@ -57,6 +57,7 @@ format you want.
 
 ```bash
 yt4k URL 2:10 to 4:05                  # export only that slice
+yt4k URL 12:00 to the end              # …and 'start to 4:05' for the opening
 yt4k URL first 30s in 1080p mp4
 yt4k URL just the audio as mp3 320k
 yt4k URL from 12:00 h265 small file    # 12:00 to the end, re-encoded
@@ -64,8 +65,9 @@ yt4k URL 1:20-3:45 --explain           # show what it understood, download nothi
 ```
 
 **Time ranges** — `2:10 to 4:05`, `2:10-4:05`, `1h02m to 1h05m30s`,
-`from 12:00`, `until 0:45`, `first 30s`, `last 90s`, or bare seconds
-(`90 to 225`). Clips are fetched with yt-dlp's `--download-sections`, so only
+`first 30s`, `last 90s`, or bare seconds (`90 to 225`). Either edge can be a
+word instead of a number: `2:10 to the end`, `from 12:00`, `start to 4:05`,
+`beginning to 3:00`, `until 0:45`. Clips are fetched with yt-dlp's `--download-sections`, so only
 the segment comes down the wire, and cuts land on the exact timestamps
 (switch to faster keyframe cuts under `[s]` → *clip cuts*). The time range
 ends up in the filename: `Title [id] (2m10s-4m05s).mp4`. There's also
@@ -91,13 +93,23 @@ enter to reuse your last settings.
 | key | does |
 |---|---|
 | `s` | full settings — resolution, codec, audio format, folder |
+| `f` | where to save — this session only, or `d` to make it the default |
 | `o` | open the download folder in Finder |
 | `:` | command palette |
 | `?` / `h` | help |
 | `esc` / `q` / `ctrl-d` | quit |
 
-Downloads land in `~/Downloads/YouTube 4K` by default. Settings persist in
+### Where things land
+
+Downloads go to `~/Downloads/YouTube 4K` by default, and settings persist in
 `~/.config/yt4k/config.json`.
+
+Press `f` to point the current session somewhere else — a shoot folder, an
+external drive, a project directory. The picker lists your default plus the
+last few folders you used; `enter` uses one for this session only, `d` also
+makes it the new default. `yt4k URL -o ~/Desktop/clips` does the same for a
+one-shot run. Either way the saved default is left alone unless you ask for
+it, so a one-off destination can't quietly become permanent.
 
 ## Moving to another machine
 
