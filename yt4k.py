@@ -12,6 +12,13 @@ press enter, repeat. Press [s] to change resolution / codec / audio format,
     yt4k URL --audio wav
     yt4k URL -v              # raw yt-dlp / ffmpeg firehose
 
+Plain English works too, on the command line or in the paste box:
+
+    yt4k URL 1:20 to 3:45            # export only that slice
+    yt4k URL first 30s in 1080p mp4
+    yt4k URL just the audio as mp3 320k
+    yt4k URL 2:10-4:05 h265 small file
+
 Requires: yt-dlp and ffmpeg on PATH.
     brew install yt-dlp ffmpeg      # macOS
 
@@ -231,6 +238,7 @@ DEFAULTS = {
     "audio_format": "m4a",
     "audio_bitrate": "192k",
     "keep_source": False,
+    "clip_precise": True,
     "output_dir": DEFAULT_OUTPUT_DIR,
 }
 
@@ -278,6 +286,228 @@ def is_lossy(fmt: str) -> bool:
         if row[0] == fmt:
             return row[4]
     return False
+
+
+# ------------------------------------------------------- natural language
+#
+# One line of input carries three things: the link(s), an optional time range
+# to export, and optional plain-English format words. Everything here turns
+# that line into (urls, settings patch, clip) — nothing below this section
+# needs to know the input was ever prose.
+
+URL_RE = re.compile(r"https?://\S+")
+
+_UNITS = {
+    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+}
+
+_CLOCK_RE = re.compile(r"\d{1,3}(?::[0-5]?\d){1,2}(?:\.\d+)?")
+_UNIT_PART = r"\d+(?:\.\d+)?\s*(?:h|hrs?|hours?|m|mins?|minutes?|s|secs?|seconds?)"
+_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([a-z]+)", re.I)
+
+# A timestamp is a clock (1:20 / 0:01:20), a unit string (1m20s, 90s, 2h),
+# or a bare number of seconds — bare only when nothing word-like follows, so
+# "1080p" and "4k" are never mistaken for times.
+_TS = (rf"(?:{_CLOCK_RE.pattern}|(?:{_UNIT_PART})(?:\s*{_UNIT_PART})*"
+       r"|\d+(?:\.\d+)?(?![\w:.]))")
+
+_SEP = r"(?:to|until|till|through|thru|->|-->|–|—|→|\.\.+|-)"
+
+
+def parse_timestamp(text: str) -> float | None:
+    """'1:20' / '0:01:20' / '1m20s' / '90s' / '90' → seconds."""
+    t = text.strip().lower()
+    if not t:
+        return None
+    if re.fullmatch(_CLOCK_RE.pattern, t):
+        secs = 0.0
+        for part in t.split(":"):
+            secs = secs * 60 + float(part)
+        return secs
+    compact = re.sub(r"\s+", "", t)
+    if re.fullmatch(rf"(?:{_UNIT_PART})+".replace(r"\s*", ""), compact):
+        total = 0.0
+        for val, unit in _UNIT_RE.findall(compact):
+            if unit not in _UNITS:
+                return None
+            total += float(val) * _UNITS[unit]
+        return total
+    if re.fullmatch(r"\d+(?:\.\d+)?", t):
+        return float(t)
+    return None
+
+
+def stamp(secs: float) -> str:
+    """Seconds → a filename-safe '1h02m03s' / '3m45s' / '20s'."""
+    secs = max(0, int(round(secs)))
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m{s:02d}s"
+    return f"{m}m{s:02d}s" if m else f"{s}s"
+
+
+class Clip:
+    """A requested slice of a video, possibly relative to its end."""
+
+    def __init__(self, start: float | None = None, end: float | None = None,
+                 tail: float | None = None):
+        self.start = start
+        self.end = end
+        self.tail = tail
+
+    def resolve(self, duration: float | None) -> tuple[float, float | None]:
+        """Absolute (start, end) seconds. `end` is None for 'through the end'."""
+        if self.tail is not None:
+            if not duration:
+                die("'last …' needs the video length, which YouTube didn't "
+                    "report — use an explicit range like 12:00 to 14:00")
+            return max(0.0, duration - self.tail), None
+        start = self.start or 0.0
+        if self.end is not None and self.end <= start:
+            die(f"that range ends before it starts "
+                f"({human_time(start)} → {human_time(self.end)})")
+        if duration and start >= duration:
+            die(f"clip starts at {human_time(start)} but the video is only "
+                f"{human_time(duration)} long")
+        return start, self.end
+
+    def label(self, duration: float | None = None) -> str:
+        if self.tail is not None:
+            return f"last {human_time(self.tail)}"
+        if self.start and self.end is None:
+            return f"{human_time(self.start)} → end"
+        if not self.start and self.end is not None:
+            return f"first {human_time(self.end)}"
+        return f"{human_time(self.start or 0)} → {human_time(self.end)}"
+
+
+def clip_tag(start: float, end: float | None) -> str:
+    """The '(1m20s-3m45s)' suffix added to a clipped file's name."""
+    return f"{stamp(start)}-{stamp(end)}" if end is not None \
+        else f"{stamp(start)}-end"
+
+
+def clip_section(start: float, end: float | None) -> str:
+    """yt-dlp --download-sections argument for one slice."""
+    return f"*{start:.3f}-{'inf' if end is None else f'{end:.3f}'}"
+
+
+_RANGE_RULES = [
+    ("range", re.compile(rf"\b(?:from\s+)?({_TS})\s*{_SEP}\s*({_TS})", re.I)),
+    ("first", re.compile(rf"\bfirst\s+({_TS})", re.I)),
+    ("tail", re.compile(rf"\blast\s+({_TS})", re.I)),
+    ("start", re.compile(rf"\b(?:from|after|start(?:ing)?(?:\s+(?:at|from))?)"
+                         rf"\s+({_TS})(?:\s+(?:onwards?|on))?", re.I)),
+    ("end", re.compile(rf"\b(?:until|till|up\s+to|before|ending\s+at)"
+                       rf"\s+({_TS})", re.I)),
+]
+
+
+def parse_clip(text: str) -> tuple[Clip | None, str]:
+    """Pull a time range out of `text`. Returns (clip, text-without-range)."""
+    for kind, rx in _RANGE_RULES:
+        m = rx.search(text)
+        if not m:
+            continue
+        times = [parse_timestamp(g) for g in m.groups()]
+        if any(t is None for t in times):
+            continue
+        rest = (text[:m.start()] + " " + text[m.end():])
+        if kind == "range":
+            return Clip(start=times[0], end=times[1]), rest
+        if kind == "first":
+            return Clip(start=0.0, end=times[0]), rest
+        if kind == "tail":
+            return Clip(tail=times[0]), rest
+        if kind == "start":
+            return Clip(start=times[0]), rest
+        return Clip(start=0.0, end=times[0]), rest
+    return None, text
+
+
+# (pattern, settings patch, chip shown back to the user). Applied in order,
+# so later words win — "1080p but actually 4k" ends up at 4K.
+_INTENT_RULES: list[tuple[str, dict, str]] = [
+    (r"\b(?:4k|uhd|2160p?)\b", {"mode": "video", "res": 2160}, "4K"),
+    (r"\b(?:1440p?|2k|qhd)\b", {"mode": "video", "res": 1440}, "1440p"),
+    (r"\b(?:1080p?|full\s*hd|fhd)\b", {"mode": "video", "res": 1080}, "1080p"),
+    (r"\b720p?\b", {"mode": "video", "res": 720}, "720p"),
+    (r"\b480p?\b", {"mode": "video", "res": 480}, "480p"),
+    (r"\b(?:best|max(?:imum)?|highest)\s+(?:quality|res(?:olution)?|available)\b",
+     {"mode": "video", "res": 0}, "best available"),
+    (r"\b(?:av1|av01)\b", {"mode": "video", "codec": "av1"}, "av1"),
+    (r"\b(?:vp9|vp09)\b", {"mode": "video", "codec": "vp9"}, "vp9"),
+    (r"\b(?:h\.?264|avc1?|x264)\b", {"mode": "video", "codec": "h264"}, "h264"),
+    (r"\b(?:h\.?265|hevc|x265)\b", {"mode": "video", "codec": "hevc"}, "h265"),
+    (r"\b(?:keep\s+source|no\s+re-?encode|as-?is|untouched|original\s+stream)\b",
+     {"mode": "video", "codec": "source"}, "keep source"),
+    (r"\bmp4\b", {"mode": "video", "container": "mp4"}, "mp4"),
+    (r"\b(?:mkv|matroska)\b", {"mode": "video", "container": "mkv"}, "mkv"),
+    (r"\b(?:audio[\s-]*only|just\s+(?:the\s+)?audio|only\s+(?:the\s+)?audio"
+     r"|no\s+video|sound\s+only|rip\s+(?:the\s+)?audio)\b",
+     {"mode": "audio"}, "audio only"),
+    (r"\bmp3\b", {"mode": "audio", "audio_format": "mp3"}, "mp3"),
+    (r"\bwav\b", {"mode": "audio", "audio_format": "wav"}, "wav"),
+    (r"\bflac\b", {"mode": "audio", "audio_format": "flac"}, "flac"),
+    (r"\b(?:m4a|aac)\b", {"mode": "audio", "audio_format": "m4a"}, "m4a"),
+    (r"\bopus\b", {"mode": "audio", "audio_format": "opus"}, "opus"),
+    (r"\b(320|256|192|128|96)\s*k(?:bps)?\b", {"audio_bitrate": None}, "{0}k"),
+    (r"\b(?:fast|quick(?:ly)?|hardware|hurry|speed)\b",
+     {"hardware": True, "preset": "veryfast"}, "fast encode"),
+    (r"\b(?:small(?:er)?\s+file|compress(?:ed)?|save\s+space|tiny|lightweight)\b",
+     {"crf": 24, "preset": "medium"}, "smaller file"),
+    (r"\b(?:high|best|max(?:imum)?)\s+quality\b|\barchival\b",
+     {"crf": 16, "preset": "slow", "hardware": False}, "high quality"),
+]
+
+_REENCODE_RE = re.compile(r"\b(?:re-?encode|transcode|convert(?:ed)?|force)\b",
+                          re.I)
+
+
+def parse_intent(text: str) -> tuple[dict, list[str]]:
+    """Read format words out of `text`. Returns (settings patch, chips)."""
+    patch: dict = {}
+    chips: list[str] = []
+    for pattern, delta, chip in _INTENT_RULES:
+        m = re.search(pattern, text, re.I)
+        if not m:
+            continue
+        if "audio_bitrate" in delta and delta["audio_bitrate"] is None:
+            patch["audio_bitrate"] = f"{m.group(1)}k"
+            chips.append(chip.format(m.group(1)))
+            continue
+        patch.update(delta)
+        chips.append(chip)
+
+    # "convert it to h264" means re-encode; a bare "h264" means prefer the
+    # stream YouTube already has.
+    if patch.get("codec") == "h264" and _REENCODE_RE.search(text):
+        patch["codec"] = "h264x"
+        chips = ["h264 re-encode" if c == "h264" else c for c in chips]
+
+    # Audio words win outright: resolution and container are meaningless then.
+    if patch.get("mode") == "audio":
+        for key in ("res", "codec", "container"):
+            patch.pop(key, None)
+        chips = [c for c in chips
+                 if c not in ("4K", "1440p", "1080p", "720p", "480p",
+                              "mp4", "mkv", "best available")]
+    return patch, chips
+
+
+def parse_request(raw: str, base: dict) -> tuple[list[str], dict, Clip | None,
+                                                 list[str]]:
+    """Split one line of input into links, settings, and an optional clip."""
+    urls = URL_RE.findall(raw)
+    rest = URL_RE.sub(" ", raw)
+    clip, rest = parse_clip(rest)
+    patch, chips = parse_intent(rest)
+    settings = dict(base)
+    settings.update(patch)
+    return urls, settings, clip, chips
 
 
 # ---------------------------------------------------------------- metadata
@@ -349,9 +579,39 @@ def build_video_format(res: int, codec: str) -> str:
     return "/".join(chain)
 
 
-def yt_dlp_fetch(url: str, workdir: Path, fmt: str, merge: str | None) -> Path:
+_sections_supported: bool | None = None
+
+
+def supports_sections() -> bool:
+    """Whether the installed yt-dlp can download a slice server-side."""
+    global _sections_supported
+    if _sections_supported is None:
+        out = subprocess.run([require("yt-dlp"), "--help"],
+                             capture_output=True, text=True)
+        _sections_supported = "--download-sections" in (out.stdout or "")
+    return _sections_supported
+
+
+def trim_local(src: Path, start: float, end: float | None) -> Path:
+    """Fallback slice for yt-dlp builds without --download-sections.
+
+    Stream-copied, so cuts land on the nearest keyframe before `start`.
+    """
+    dst = src.with_name(f"{src.stem}.clip{src.suffix}")
+    cmd = [require("ffmpeg"), "-y", "-ss", f"{start:.3f}"]
+    if end is not None:
+        cmd += ["-to", f"{end:.3f}"]
+    cmd += ["-i", str(src), "-map", "0:v:0?", "-map", "0:a:0?",
+            "-c", "copy", str(dst)]
+    run_ffmpeg(cmd, (end - start) if end else None, "  trimming    ")
+    src.unlink(missing_ok=True)
+    return dst
+
+
+def yt_dlp_fetch(url: str, workdir: Path, fmt: str, merge: str | None,
+                 section: str | None = None, precise: bool = True) -> Path:
     template = str(workdir / "%(title).150B [%(id)s].%(ext)s")
-    bar = Bar("  downloading")
+    bar = Bar("  downloading" if not section else "  clipping   ")
 
     def on_line(line: str) -> None:
         if not line.startswith("YT4K "):
@@ -373,9 +633,15 @@ def yt_dlp_fetch(url: str, workdir: Path, fmt: str, merge: str | None) -> Path:
            ("download:YT4K %(progress.downloaded_bytes)s "
             "%(progress.total_bytes_estimate)s %(progress.total_bytes)s "
             "%(progress.speed)s %(progress.eta)s"),
-           "-o", template, url]
+           "-o", template]
     if merge:
-        cmd[3:3] = ["--merge-output-format", merge]
+        cmd += ["--merge-output-format", merge]
+    if section:
+        cmd += ["--download-sections", section]
+        if precise:
+            # Re-cut at the exact timestamps instead of the nearest keyframe.
+            cmd.append("--force-keyframes-at-cuts")
+    cmd.append(url)
 
     stream(cmd, on_line)
 
@@ -496,7 +762,7 @@ def normalize(codec: str | None) -> str:
             "vp09": "vp9"}.get(c, c)
 
 
-def run_job(url: str, s: dict) -> Path:
+def run_job(url: str, s: dict, clip: Clip | None = None) -> Path:
     require("yt-dlp")
     require("ffmpeg")
     require("ffprobe")
@@ -519,12 +785,25 @@ def run_job(url: str, s: dict) -> Path:
         bits.append("audio only")
     if bits:
         print(f"  {C.grey}{' · '.join(bits)}{C.reset}")
+
+    cut = None
+    if clip:
+        start, end = clip.resolve(dur)
+        cut = (start, end)
+        span = (end - start) if end is not None else (
+            (dur - start) if dur else None)
+        length = f"  ({human_time(span)})" if span else ""
+        print(f"  {C.cyan}✂ clip{C.reset}  {C.bold}{human_time(start)} → "
+              f"{human_time(end) if end is not None else 'end'}{C.reset}"
+              f"{C.grey}{length}{C.reset}")
+        dur = span or dur
     print()
 
     with tempfile.TemporaryDirectory(dir=out_dir, prefix=".yt4k-") as tmp:
         workdir = Path(tmp)
-        final = (audio_job(url, workdir, out_dir, s, dur) if s["mode"] == "audio"
-                 else video_job(url, workdir, out_dir, s, dur))
+        final = (audio_job(url, workdir, out_dir, s, dur, cut)
+                 if s["mode"] == "audio"
+                 else video_job(url, workdir, out_dir, s, dur, cut))
 
     info = probe(final)
     tags = []
@@ -553,10 +832,26 @@ def unique(path: Path) -> Path:
     return path.with_name(f"{path.stem} ({int(time.time())}){path.suffix}")
 
 
+def fetch_maybe_clipped(url: str, workdir: Path, fmt: str, merge: str | None,
+                        s: dict, cut: tuple[float, float | None] | None) -> Path:
+    """Download, slicing server-side when yt-dlp can do it for us."""
+    if not cut:
+        return yt_dlp_fetch(url, workdir, fmt, merge)
+    start, end = cut
+    if supports_sections():
+        return yt_dlp_fetch(url, workdir, fmt, merge,
+                            section=clip_section(start, end),
+                            precise=bool(s["clip_precise"]))
+    print(f"  {C.yellow}!{C.reset} {C.grey}this yt-dlp can't download a "
+          f"section — fetching the whole video, then trimming{C.reset}")
+    return trim_local(yt_dlp_fetch(url, workdir, fmt, merge), start, end)
+
+
 def video_job(url: str, workdir: Path, out_dir: Path, s: dict,
-              dur: float | None) -> Path:
+              dur: float | None,
+              cut: tuple[float, float | None] | None = None) -> Path:
     fmt = build_video_format(int(s["res"]), s["codec"])
-    src = yt_dlp_fetch(url, workdir, fmt, merge="mkv")
+    src = fetch_maybe_clipped(url, workdir, fmt, "mkv", s, cut)
 
     info = probe(src)
     vcodec = normalize(info.get("vcodec"))
@@ -580,7 +875,8 @@ def video_job(url: str, workdir: Path, out_dir: Path, s: dict,
         ext = "mp4" if (vcodec in MP4_SAFE_VIDEO
                         and acodec in MP4_SAFE_AUDIO) else "mkv"
 
-    final = unique(out_dir / f"{src.stem}.{ext}")
+    stem = src.stem + (f" ({clip_tag(*cut)})" if cut else "")
+    final = unique(out_dir / f"{stem}.{ext}")
 
     if target and vcodec != target:
         transcode_video(src, final, target, s, duration)
@@ -596,23 +892,25 @@ def video_job(url: str, workdir: Path, out_dir: Path, s: dict,
 
 
 def audio_job(url: str, workdir: Path, out_dir: Path, s: dict,
-              dur: float | None) -> Path:
-    src = yt_dlp_fetch(url, workdir, "bestaudio/best", merge=None)
+              dur: float | None,
+              cut: tuple[float, float | None] | None = None) -> Path:
+    src = fetch_maybe_clipped(url, workdir, "bestaudio/best", None, s, cut)
     info = probe(src)
     duration = info.get("duration") or dur
 
     row = next(r for r in AUDIO_FORMATS if r[0] == s["audio_format"])
     _, _, ext, codec, lossy = row
+    stem = src.stem + (f" ({clip_tag(*cut)})" if cut else "")
 
     if codec is None:                           # keep whatever YouTube gave us
-        final = unique(out_dir / src.name)
+        final = unique(out_dir / f"{stem}{src.suffix}")
         shutil.move(str(src), final)
         return final
 
     if lossy and not has_encoder(codec):
         die(f"ffmpeg has no {codec} encoder — pick another audio format")
 
-    final = unique(out_dir / f"{src.stem}.{ext}")
+    final = unique(out_dir / f"{stem}.{ext}")
     convert_audio(src, final, codec, s["audio_bitrate"], lossy, duration)
     if s["keep_source"]:
         shutil.move(str(src), unique(out_dir / src.name))
@@ -730,6 +1028,20 @@ def panel_line(text: str = "", marker: str = "│") -> None:
     print(f"  {C.grey}{marker}{C.reset}  {text[:usable]}")
 
 
+SAMPLE_URL = "https://youtu.be/dQw4w9WgXcQ"
+
+# Shown on the home screen and, condensed, as ghost text in the input box —
+# the syntax is only useful if you never have to go looking for it.
+EXAMPLES = [
+    ("youtu.be/…  2:10 to 4:05", "exports only that slice"),
+    ("youtu.be/…  first 30s in 1080p mp4", "a clip, in the format you want"),
+    ("youtu.be/…  just the audio as mp3 320k", "audio only, in plain English"),
+    ("youtu.be/…  from 12:00 h265 small file", "12:00 to the end, re-encoded"),
+]
+
+PLACEHOLDER = f"paste a link…   e.g.  {SAMPLE_URL}  2:10 to 4:05  1080p mp4"
+
+
 def home(s: dict, note: str = "", recent: list[str] | None = None) -> None:
     banner()
     print()
@@ -749,7 +1061,10 @@ def home(s: dict, note: str = "", recent: list[str] | None = None) -> None:
         print(f"  {C.dim}Queue is empty — paste a link below to add one.{C.reset}")
     print()
     print(f"  {C.bold}What are we downloading?{C.reset}")
-    print(f"  {C.dim}Paste one YouTube link, or space-separate several links for a batch.{C.reset}")
+    print(f"  {C.dim}Paste a link — then just say what you want after it, in plain English.{C.reset}")
+    for example, what in EXAMPLES:
+        print(f"    {C.grey}{example:<40}{C.reset}{C.dim}{what}{C.reset}")
+    print(f"  {C.dim}[?] lists every word it understands.{C.reset}")
     print(f"  {C.grey}{'─' * max(width() - 4, 20)}{C.reset}")
     if note:
         print(f"  {C.red}!{C.reset} {note}")
@@ -772,6 +1087,7 @@ def help_screen() -> None:
     lines = [
         ("paste a link", "downloads it with your current settings"),
         ("several links", "paste them space-separated to queue a batch"),
+        ("link + words", "say what you want after the link — see below"),
         ("1 / 2 / 3", "use 4K, 1440p, or 1080p for new downloads"),
         ("v / a", "switch between video and audio-only mode"),
         ("s", "settings — resolution, codec, audio format, folder"),
@@ -784,14 +1100,34 @@ def help_screen() -> None:
     ]
     print()
     for k, v in lines:
-        print(f"  {C.cyan}{k:<16}{C.reset}{C.grey}{v}{C.reset}")
+        print(f"  {C.cyan}{k:<18}{C.reset}{C.grey}{v}{C.reset}")
     print()
-    print(f"  {C.grey}codecs: 'keep source' never re-encodes — fastest, and "
-          f"exactly what{C.reset}")
-    print(f"  {C.grey}YouTube served. AV1 / VP9 / avc1 pick that stream if it "
-          f"exists.{C.reset}")
-    print(f"  {C.grey}'re-encode' options convert anything to H.264 / H.265 "
-          f"with ffmpeg.{C.reset}")
+    print(f"  {C.red}CLIPS{C.reset}  {C.grey}add a time range after the link "
+          f"and only that slice is exported{C.reset}")
+    for syntax, means in (
+        ("2:10 to 4:05  ·  2:10-4:05", "from 2:10 until 4:05"),
+        ("1h02m to 1h05m30s", "hours / minutes / seconds spelled out"),
+        ("from 12:00", "12:00 through to the end"),
+        ("until 0:45", "the opening, up to 0:45"),
+        ("first 30s  ·  last 90s", "relative to the start or the end"),
+        ("90 to 225", "bare numbers are seconds"),
+    ):
+        print(f"  {C.cyan}{syntax:<28}{C.reset}{C.grey}{means}{C.reset}")
+    print()
+    print(f"  {C.red}FORMAT WORDS{C.reset}  {C.grey}mix any of these into the "
+          f"same line, in any order{C.reset}")
+    for group, words in (
+        ("quality", "4k · 1440p · 1080p · 720p · 480p · best quality"),
+        ("codec", "av1 · vp9 · h264 · h265 / hevc · keep source"),
+        ("re-encode", "'convert to h264' re-encodes; bare 'h264' just "
+                      "prefers that stream"),
+        ("file type", "mp4 · mkv"),
+        ("audio", "just the audio · mp3 · wav · flac · m4a · opus · 320k"),
+        ("shorthand", "fast · smaller file · high quality"),
+    ):
+        print(f"  {C.cyan}{group:<12}{C.reset}{C.grey}{words}{C.reset}")
+    print(f"\n  {C.grey}'keep source' never re-encodes — fastest, and exactly "
+          f"what YouTube served.{C.reset}")
     print(f"\n  {C.dim}press any key to return · esc also returns{C.reset}")
     with KeyMode():
         read_key()
@@ -828,18 +1164,28 @@ def read_command() -> str:
     """
     value: list[str] = []
     sys.stdout.write(f"  {C.red}{C.bold}›{C.reset} ")
-    sys.stdout.flush()
+
+    def ghost(show: bool) -> None:
+        """Draw (or wipe) the example text sitting in the empty input box."""
+        sys.stdout.write("\033[K")
+        if show:
+            text = PLACEHOLDER[:max(width() - 6, 20)]
+            sys.stdout.write(f"{C.dim}{text}{C.reset}\033[{len(text)}D")
+        sys.stdout.flush()
+
+    ghost(True)
     with KeyMode():
         while True:
             key = read_key()
             if key == "enter":
+                if not value:
+                    ghost(False)
                 print()
                 return "".join(value).strip()
-            if key in ("esc", "ctrl-d"):
-                print()
-                return key
-            if key == "ctrl-l":
-                # Let the main loop redraw a clean, complete interface.
+            if key in ("esc", "ctrl-d", "ctrl-l"):
+                # ctrl-l lets the main loop redraw a clean interface.
+                if not value:
+                    ghost(False)
                 print()
                 return key
             if key == "backspace":
@@ -847,8 +1193,12 @@ def read_command() -> str:
                     value.pop()
                     sys.stdout.write("\b \b")
                     sys.stdout.flush()
+                    if not value:
+                        ghost(True)
                 continue
             if len(key) == 1 and key >= " ":
+                if not value:
+                    ghost(False)        # first keystroke clears the example
                 value.append(key)
                 sys.stdout.write(key)
                 sys.stdout.flush()
@@ -877,7 +1227,7 @@ def cycle_field(draft: dict, key: str, step: int) -> None:
     elif key == "crf":
         draft["crf"] = min(51, max(0, int(draft["crf"]) + step))
         return
-    elif key in ("hardware", "keep_source"):
+    elif key in ("hardware", "keep_source", "clip_precise"):
         draft[key] = not draft[key]
         return
     else:
@@ -912,6 +1262,9 @@ def settings_screen(s: dict) -> dict:
              label_of(AUDIO_FORMATS, draft["audio_format"]), audio),
             ("audio_bitrate", "audio bitrate", draft["audio_bitrate"],
              lossy or reenc),
+            ("clip_precise", "clip cuts",
+             "exact timestamps" if draft["clip_precise"]
+             else "nearest keyframe (faster)", True),
             ("keep_source", "keep original file",
              "yes" if draft["keep_source"] else "no", True),
             ("output_dir", "folder  (enter to edit)",
@@ -967,7 +1320,8 @@ def settings_screen(s: dict) -> dict:
             return s
 
 
-def quick_job_screen(s: dict, count: int) -> dict | None:
+def quick_job_screen(s: dict, count: int, clip: Clip | None = None,
+                     chips: list[str] | None = None) -> dict | None:
     """Fast per-link confirm screen: format, quality, encoding, file type.
 
     Shown right after a link (or batch of links) is submitted, so switching
@@ -994,6 +1348,10 @@ def quick_job_screen(s: dict, count: int) -> dict | None:
             if is_lossy(draft["audio_format"]):
                 table.append(("audio_bitrate", "bitrate",
                              draft["audio_bitrate"]))
+        if clip:
+            table.append(("clip_precise", "clip cuts",
+                          "exact timestamps" if draft["clip_precise"]
+                          else "nearest keyframe (faster)"))
         return table
 
     cur = 0
@@ -1007,9 +1365,17 @@ def quick_job_screen(s: dict, count: int) -> dict | None:
             print(f"  {C.red}BEFORE WE GRAB{C.reset}  {C.dim}{what}{C.reset}")
             print(f"  {C.grey}↑↓ move    ←→ change    v/a format    1/2/3 quality"
                   f"    enter start    esc cancel{C.reset}\n")
+            if clip:
+                print(f"  {C.cyan}✂ clip{C.reset}     {C.bold}"
+                      f"{clip.label()}{C.reset}")
+            if chips:
+                print(f"  {C.dim}from your words{C.reset}  "
+                      + " ".join(f"{C.cyan}{c}{C.reset}" for c in chips))
+            if clip or chips:
+                print()
             for i, (key, label, val) in enumerate(table):
                 marker = f"{C.cyan}›{C.reset}" if i == cur else " "
-                name = f"{label:<10}"
+                name = f"{label:<11}"
                 if i == cur:
                     print(f"  {marker} {C.bold}{name}{C.reset}"
                           f"{C.cyan}‹ {val} ›{C.reset}")
@@ -1038,9 +1404,6 @@ def quick_job_screen(s: dict, count: int) -> dict | None:
 
 
 # --------------------------------------------------------------------- shell
-
-URL_RE = re.compile(r"https?://\S+")
-
 
 def open_folder(s: dict) -> None:
     path = Path(s["output_dir"]).expanduser()
@@ -1104,13 +1467,14 @@ def interactive() -> None:
             note = f"{C.grey}opened {tilde(Path(s['output_dir']).expanduser())}{C.reset}"
             continue
 
-        urls = URL_RE.findall(raw)
+        urls, wanted, clip, chips = parse_request(raw, s)
         if not urls:
             note = f"{C.yellow}!{C.reset} that didn't look like a link — " \
-                   f"{C.grey}paste a full https://… url{C.reset}"
+                   f"{C.grey}paste a full https://… url, then say what you " \
+                   f"want: {C.reset}{C.dim}… 2:10 to 4:05 in 1080p{C.reset}"
             continue
 
-        chosen = quick_job_screen(s, len(urls))
+        chosen = quick_job_screen(wanted, len(urls), clip, chips)
         if chosen is None:
             note = f"{C.grey}cancelled{C.reset}"
             continue
@@ -1122,7 +1486,7 @@ def interactive() -> None:
             if len(urls) > 1:
                 print(f"\n  {C.grey}[{i}/{len(urls)}]{C.reset}")
             try:
-                final = run_job(url, s)
+                final = run_job(url, s, clip)
                 done += 1
                 recent.append(f"{C.green}✓{C.reset} {final.name}")
             except Yt4kError as e:
@@ -1157,8 +1521,17 @@ def main() -> None:
     s = load_settings()
     p = argparse.ArgumentParser(
         description="Interactive YouTube downloader. Run bare for the "
-                    "downloader page, or pass a URL for a one-shot download.")
-    p.add_argument("url", nargs="?", help="YouTube video URL")
+                    "downloader page, or pass a URL for a one-shot download. "
+                    "Plain English after the URL works: "
+                    "yt4k URL 1:20 to 3:45 in 1080p mp4")
+    p.add_argument("words", nargs="*", metavar="URL [words…]",
+                   help="YouTube video URL, optionally followed by a time "
+                        "range and format words")
+    p.add_argument("--clip", metavar="RANGE",
+                   help="export only this slice, e.g. --clip 1:20-3:45, "
+                        "--clip 'from 12:00', --clip 'last 90s'")
+    p.add_argument("--explain", action="store_true",
+                   help="show how the request was understood, download nothing")
     p.add_argument("-o", "--output-dir", help=f"where to write the file "
                                               f"(default: {s['output_dir']})")
     p.add_argument("--res", type=int, choices=[r[0] for r in RESOLUTIONS],
@@ -1184,6 +1557,18 @@ def main() -> None:
 
     VERBOSE = args.verbose
 
+    # Plain English first, so explicit flags below always win over words.
+    raw = " ".join(args.words)
+    urls, s, clip, chips = parse_request(raw, s)
+    if args.clip:
+        parsed, leftover = parse_clip(args.clip)
+        if parsed is None:
+            parsed, _ = parse_clip(f"from {args.clip}")
+        if parsed is None:
+            p.error(f"couldn't read a time range from --clip {args.clip!r} "
+                    f"(try 1:20-3:45, 'from 12:00', or 'last 90s')")
+        clip = parsed
+
     if args.max_height is not None:
         s["res"] = args.max_height
     if args.encoder:
@@ -1203,13 +1588,25 @@ def main() -> None:
     if args.keep_source:
         s["keep_source"] = True
 
-    if not args.url:
+    if args.explain:
+        print(f"  {C.bold}understood as{C.reset}")
+        print(f"    links     {', '.join(urls) or '(none)'}")
+        print(f"    clip      {clip.label() if clip else '(whole video)'}")
+        print(f"    settings  {summary(s)}")
+        if chips:
+            print(f"    words     {' · '.join(chips)}")
+        return
+
+    if not urls:
+        if raw:
+            p.error(f"no URL found in {raw!r}")
         if not sys.stdin.isatty():
             p.error("no URL given (and stdin isn't a terminal)")
         interactive()
         return
 
-    run_job(args.url, s)
+    for url in urls:
+        run_job(url, s, clip)
 
 
 if __name__ == "__main__":
