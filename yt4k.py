@@ -1566,6 +1566,10 @@ def interactive() -> None:
     note = ""
     recent: list[str] = []
     while True:
+        # Every other screen clears before drawing; without this the home
+        # screen stacked a fresh banner under the last one on each redraw
+        # until the terminal was a wall of logos.
+        clear()
         home(s, note, recent)
         note = ""
         try:
@@ -1631,6 +1635,7 @@ def interactive() -> None:
             continue
         s = chosen
 
+        clear()                    # leave the confirm screen behind
         banner()
         done = 0
         for i, url in enumerate(urls, 1):
