@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
-from textual import events
+from textual import events, work
 from textual.app import App
 
 from ..jobs import JobRunner
-from ..models import SessionState
-from ..settings import SettingsStore
+from ..models import SessionState, ValidationError, Yt4kError
+from ..parsing import normalize_metadata, parse_request
+from ..planning import JobPlan, build_job_plan
+from ..settings import SettingsStore, remember_destination
+from .screens.destination import DestinationChosen
+from .screens.home import RequestSubmitted
 
 MIN_WIDTH = 40
 MIN_HEIGHT = 12
@@ -45,6 +50,53 @@ class Yt4kApp(App):
         too_small = event.size.width < MIN_WIDTH or event.size.height < MIN_HEIGHT
         for screen in self.screen_stack:
             screen.set_class(too_small, "size-blocked")
+
+    def on_destination_chosen(self, message: DestinationChosen) -> None:
+        settings = remember_destination(self.state.settings, message.path)
+        if message.make_default:
+            settings = replace(settings, output_dir=str(message.path))
+        self.store.save(settings)
+        self.state.settings = settings
+        self.state.destination = message.path
+        from .screens.home import HomeScreen
+
+        if message.session_start:
+            self.switch_screen(HomeScreen())
+        else:
+            self.pop_screen()
+            if isinstance(self.screen, HomeScreen):
+                self.screen.refresh_context()
+
+    def on_request_submitted(self, message: RequestSubmitted) -> None:
+        self._fetch_metadata_and_review(message.raw)
+
+    @work(thread=True, exclusive=True)
+    def _fetch_metadata_and_review(self, raw: str) -> None:
+        parsed = parse_request(raw, self.state.settings)
+        try:
+            metadata = tuple(
+                normalize_metadata(url, self.runner.video_info(url))
+                for url in parsed.urls
+            )
+            plan = build_job_plan(
+                parsed.urls, self.state.destination, parsed.settings,
+                parsed.clip, parsed.modifiers, metadata,
+            )
+        except (ValidationError, Yt4kError) as error:
+            self.call_from_thread(self._show_home_error, str(error))
+            return
+        self.call_from_thread(self._push_review, plan)
+
+    def _show_home_error(self, message: str) -> None:
+        from .screens.home import HomeScreen
+
+        if isinstance(self.screen, HomeScreen):
+            self.screen.show_error(message)
+
+    def _push_review(self, plan: JobPlan) -> None:
+        from .screens.review import ReviewScreen
+
+        self.push_screen(ReviewScreen(plan))
 
     def exit_with_summary(self) -> None:
         destination = self.state.destination
