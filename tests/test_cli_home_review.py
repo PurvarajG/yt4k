@@ -116,3 +116,153 @@ async def test_session_results_are_bounded(tmp_path):
         await _goto_home(pilot)
         text = str(app.screen.query_one("#session-results").content)
         assert text.count("file") <= 5
+
+
+async def _goto_review(pilot, app, request="https://youtu.be/example 1080p"):
+    await _goto_home(pilot)
+    field = app.screen.query_one("#request-input", Input)
+    field.value = request
+    await pilot.press("enter")
+    for _ in range(20):
+        await pilot.pause(0.05)
+        if isinstance(app.screen, ReviewScreen):
+            return
+
+
+@pytest.mark.asyncio
+async def test_review_shows_destination_metadata_and_modifiers(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await _goto_review(pilot, app)
+        assert isinstance(app.screen, ReviewScreen)
+        dest_text = str(app.screen.query_one("#review-destination").content)
+        assert str(app.state.destination) in dest_text
+        modifiers = str(app.screen.query_one("#review-modifiers").content)
+        assert "1080p" in modifiers
+
+
+@pytest.mark.asyncio
+async def test_review_download_focused_by_default(tmp_path):
+    from textual.widgets import OptionList
+
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await _goto_review(pilot, app)
+        rows = app.screen.query_one("#review-rows", OptionList)
+        highlighted_option = rows.get_option_at_index(rows.highlighted)
+        assert highlighted_option.id == "row-download"
+
+
+@pytest.mark.asyncio
+async def test_review_escape_preserves_request_and_returns_home(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await _goto_review(pilot, app)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, HomeScreen)
+        assert "example" in app.state.request_draft
+
+
+@pytest.mark.asyncio
+async def test_review_confirm_emits_one_immutable_plan(tmp_path):
+    from yt4k.cli.screens.download import DownloadScreen
+
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await _goto_review(pilot, app)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, DownloadScreen)
+        assert app.screen.plan.settings.res == 1080
+
+
+@pytest.mark.asyncio
+async def test_settings_screen_hides_irrelevant_fields(tmp_path):
+    from textual.widgets import Select
+    from yt4k.cli.screens.settings import SettingsScreen
+
+    app = make_app(tmp_path, settings=Settings(mode="audio", audio_format="wav"))
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        app.push_screen(SettingsScreen())
+        await pilot.pause()
+        assert isinstance(app.screen, SettingsScreen)
+        assert not app.screen.query("#field-res")
+        assert not app.screen.query("#field-audio-bitrate")  # wav isn't lossy
+
+
+@pytest.mark.asyncio
+async def test_settings_save_persists_once(tmp_path):
+    from yt4k.cli.screens.settings import SettingsScreen
+    from textual.widgets import Select, Button
+
+    app = make_app(tmp_path, settings=Settings(mode="video", res=2160))
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        app.push_screen(SettingsScreen())
+        await pilot.pause()
+        select = app.screen.query_one("#field-res", Select)
+        select.value = 1080
+        await pilot.pause()
+        await pilot.click("#save-button")
+        await pilot.pause()
+        assert isinstance(app.screen, HomeScreen)
+        assert app.state.settings.res == 1080
+        reloaded, _ = app.store.load()
+        assert reloaded.res == 1080
+
+
+@pytest.mark.asyncio
+async def test_settings_cancel_discards_draft(tmp_path):
+    from yt4k.cli.screens.settings import SettingsScreen
+    from textual.widgets import Select
+
+    app = make_app(tmp_path, settings=Settings(mode="video", res=2160))
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        app.push_screen(SettingsScreen())
+        await pilot.pause()
+        select = app.screen.query_one("#field-res", Select)
+        select.value = 480
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, HomeScreen)
+        assert app.state.settings.res == 2160
+
+
+@pytest.mark.asyncio
+async def test_help_screen_escape_returns_without_state_loss(tmp_path):
+    from yt4k.cli.screens.help import HelpScreen
+
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        app.state.request_draft = "kept-draft"
+        app.push_screen(HelpScreen())
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, HomeScreen)
+        assert app.state.request_draft == "kept-draft"
+
+
+@pytest.mark.asyncio
+async def test_help_screen_search_filters_sections(tmp_path):
+    from yt4k.cli.screens.help import HelpScreen
+    from textual.widgets import Input as HelpInput, Static as HelpStatic
+
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        app.push_screen(HelpScreen())
+        await pilot.pause()
+        search = app.screen.query_one("#help-search", HelpInput)
+        search.focus()
+        await pilot.pause()
+        await pilot.press(*"clip")
+        await pilot.pause()
+        content = str(app.screen.query_one("#help-content", HelpStatic).content)
+        assert "2:10" in content
+        assert "ctrl+c" not in content.lower()

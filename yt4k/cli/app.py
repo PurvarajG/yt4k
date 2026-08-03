@@ -13,6 +13,8 @@ from ..planning import JobPlan, build_job_plan
 from ..settings import SettingsStore, remember_destination
 from .screens.destination import DestinationChosen
 from .screens.home import RequestSubmitted
+from .screens.review import ReviewConfirmed
+from .screens.settings import SettingsSaved
 
 MIN_WIDTH = 40
 MIN_HEIGHT = 12
@@ -97,6 +99,23 @@ class Yt4kApp(App):
         from .screens.review import ReviewScreen
 
         self.push_screen(ReviewScreen(plan))
+
+    def on_review_confirmed(self, message: ReviewConfirmed) -> None:
+        if message.plan.settings != self.state.settings:
+            self.state.settings = message.plan.settings
+            self.store.save(self.state.settings)
+        from .screens.download import DownloadScreen
+
+        self.switch_screen(DownloadScreen(message.plan))
+
+    def on_settings_saved(self, message: SettingsSaved) -> None:
+        self.state.settings = message.settings
+        self.store.save(message.settings)
+        self.pop_screen()
+        from .screens.home import HomeScreen
+
+        if isinstance(self.screen, HomeScreen):
+            self.screen.refresh_context()
 
     def exit_with_summary(self) -> None:
         destination = self.state.destination
