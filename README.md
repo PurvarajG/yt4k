@@ -1,25 +1,14 @@
 # yt4k
 
 An interactive YouTube downloader that lives in your terminal. Run it bare
-and it takes over the terminal as a downloader page: paste a link, press
-enter, repeat.
-
-```
-  █   █  █████  █   █  █   █
-  █   █    █    █   █  █  █
-   █ █     █    █   █  █ █
-    █      █    █████  ██
-    █      █        █  █ █
-    █      █        █  █  █
-    █      █        █  █   █
-  YOUTUBE DOWNLOADER
-  ────────────────────────────────────────────────────────────
-```
+and it opens a focused, keyboard-first Textual workbench: choose a
+destination, paste a link, review what yt4k understood, and download.
 
 ## Install
 
 Requires **Python 3.10+**, [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and
-`ffmpeg`.
+`ffmpeg`. The installer also installs [Textual](https://textual.textualize.io/),
+which powers the interactive workbench.
 
 ```bash
 git clone https://github.com/PurvarajG/yt4k.git
@@ -30,19 +19,21 @@ cd yt4k
 The installer:
 - installs `yt-dlp` and `ffmpeg` (via Homebrew on macOS, via pip + your
   package manager on Linux) if they're missing
-- copies `yt4k.py` to `~/yt4k.py`
-- adds a `yt4k` launcher to `~/.local/bin`
+- adds a `yt4k` launcher to `~/.local/bin` that runs `yt4k.py` straight out
+  of this folder — so keep the folder where it is, and `git pull` alone is
+  enough to update
+- removes `~/yt4k.py` if an older install left that copy behind
 
 If `~/.local/bin` isn't already on your `PATH`, the installer tells you the
 line to add to your shell rc file.
 
-Re-run `./install.sh` any time to pick up an update — pull the latest repo
-changes first with `git pull`.
+Re-run `./install.sh` only if you move the folder or the launcher goes
+missing; updates themselves need nothing but `git pull`.
 
 ## Use
 
 ```bash
-yt4k                       # interactive downloader page
+yt4k                       # interactive Textual workbench
 yt4k URL                   # one-shot, uses your saved settings
 yt4k URL --res 1080 --codec h264
 yt4k URL --audio wav
@@ -81,38 +72,61 @@ container (`mp4`, `mkv`), audio (`just the audio`, `mp3`, `wav`, `flac`,
 just prefers the stream YouTube already has. Explicit flags always beat
 words, and audio words override any resolution you also mentioned.
 
-Whatever it read back is shown as chips on the confirm screen before
-anything downloads, so a misread is one keypress from being fixed.
+Whatever it read back is shown on the review screen before anything
+downloads, so a misread is one keypress from being fixed.
 
-Inside the interactive page, paste one or more space-separated links and
-press enter. You'll get a quick prompt to confirm format (video/audio),
-quality, encoding, and file type before the download starts — press `v`/`a`
-to jump straight to video/audio, `1`/`2`/`3` for 4K/1440p/1080p, or just hit
-enter to reuse your last settings.
+### Inside the workbench
 
-| key | does |
-|---|---|
-| `s` | full settings — resolution, codec, audio format, folder |
-| `f` | where to save — this session only, or `d` to make it the default |
-| `o` | open the download folder in Finder |
-| `:` | command palette |
-| `?` / `h` | help |
-| `esc` / `q` / `ctrl-d` | quit |
+Every interactive session opens on the **destination screen** — it's always
+first, and it's the one thing yt4k always asks before doing anything else.
+Your saved default is highlighted; `enter` uses it for this session, `d` on
+any folder (default, a recent one, or a path you type or paste) also makes it
+the new default, and `esc` leaves yt4k since no destination was chosen yet.
+
+From there you land on the **home screen**, with the request box focused and
+your destination and current format visible above it. Paste one or more
+space-separated links, optionally followed by a time range or format words,
+and press enter. Every valid request opens the **review screen** — title,
+destination, quality/format, clip range, and anything it read from your
+words, with `Download` focused. Arrow keys move between fields, `enter`
+cycles a field's value or confirms `Download`, and `esc` goes back to home
+with your request preserved.
+
+Confirming opens the **download screen**: stage, progress, size, speed, and
+ETA for the active file (and batch position for more than one). `ctrl+c`
+cancels — press it again during cleanup to force an exit. When it's done you
+get one obvious action back to home, plus retry / edit-settings on failure.
+
+| key | where | does |
+|---|---|---|
+| `enter` | destination | use the highlighted folder for this session |
+| `d` | destination | use it, and make it the new default |
+| `f` | home | change where this session saves |
+| `s` | home | settings — resolution, codec, audio format |
+| `?` | home | help — searchable keys and request syntax |
+| `←→` / `enter` | review | change a field / confirm `Download` |
+| `ctrl+c` | download | cancel (again to force-exit during cleanup) |
+| `esc` | any screen | back, or quit from destination/home |
 
 ### Where things land
 
-Downloads go to `~/Downloads/YouTube 4K` by default, and settings persist in
-`~/.config/yt4k/config.json`.
+The destination screen asks where to save on every interactive session,
+because the folder you wanted last week is rarely the one you want today.
+`d` on any folder makes it the new default; `esc` (only from that screen)
+leaves without picking one.
 
-Press `f` to point the current session somewhere else — a shoot folder, an
-external drive, a project directory. The picker lists your default plus the
-last few folders you used; `enter` uses one for this session only, `d` also
-makes it the new default. `yt4k URL -o ~/Desktop/clips` does the same for a
-one-shot run. Either way the saved default is left alone unless you ask for
-it, so a one-off destination can't quietly become permanent.
+Downloads go to `~/Downloads/YouTube 4K` until you change that, and settings
+persist in `~/.config/yt4k/config.json`.
+
+Press `f` from home to point the current session somewhere else — a shoot
+folder, an external drive, a project directory. The picker lists your default
+plus the last few folders you used; `enter` uses one for this session only,
+`d` also makes it the new default. `yt4k URL -o ~/Desktop/clips` does the
+same for a one-shot run. Either way the saved default is left alone unless
+you ask for it, so a one-off destination can't quietly become permanent.
 
 ## Moving to another machine
 
 Clone this repo on the new machine and run `./install.sh` — that's it. Your
 settings and downloads are per-machine (not synced by this repo); the
-installer only needs `yt4k.py` to set things up fresh.
+installer only needs this folder to set things up fresh.
