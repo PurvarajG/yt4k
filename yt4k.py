@@ -52,9 +52,12 @@ from pathlib import Path
 # while also exposing the adjacent shared package as ``yt4k.*``.
 __path__ = [str(Path(__file__).with_name("yt4k"))]
 
-from yt4k.models import Settings, ValidationError, Yt4kError as CoreYt4kError
+from yt4k.jobs import CancellationToken, JobRunner
+from yt4k.models import JobStage, Settings, ValidationError
+from yt4k.models import Yt4kError as CoreYt4kError
 from yt4k.parsing import Clip as CoreClip, parse_clip as core_parse_clip
-from yt4k.parsing import parse_request as core_parse_request
+from yt4k.parsing import normalize_metadata, parse_request as core_parse_request
+from yt4k.planning import build_job_plan
 from yt4k.settings import SettingsStore
 
 DEFAULT_OUTPUT_DIR = "~/Downloads/YouTube 4K"
@@ -1868,6 +1871,79 @@ def session(s: dict) -> tuple[int, dict]:
 
 # ---------------------------------------------------------------------- main
 
+def _present_progress(bars: dict, event) -> None:
+    """The only non-Textual progress printer: renders a ProgressEvent as a
+    plain-text line, honouring VERBOSE (raw firehose handled upstream)."""
+    key = (event.item_index, event.stage)
+    label = {
+        JobStage.METADATA: "  fetching info",
+        JobStage.DOWNLOADING: "  downloading",
+        JobStage.CLIPPING: "  clipping   ",
+        JobStage.REMUXING: "  remuxing    ",
+        JobStage.ENCODING: "  encoding    ",
+        JobStage.FINALIZING: "  finalizing  ",
+    }[event.stage]
+    if event.stage == JobStage.METADATA:
+        title = event.message[:width() - 4]
+        print(f"\n  {C.bold}{title}{C.reset}")
+        return
+    if event.stage == JobStage.FINALIZING:
+        return
+    bar = bars.setdefault(key, Bar(label))
+    frac = event.fraction if event.fraction is not None else 0.0
+    right = ""
+    if event.downloaded_bytes is not None:
+        right = f"{human_bytes(event.downloaded_bytes)}/{human_bytes(event.total_bytes)}"
+        if event.speed:
+            right += f"  {human_bytes(event.speed)}/s"
+        right += f"  eta {human_time(event.eta)}"
+    else:
+        right = f"eta {human_time(event.eta)}"
+    bar.update(frac, right)
+
+
+def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path) -> None:
+    """Execute one or more URLs through the shared job engine, printing a
+    plain-text summary per file. This is the only one-shot progress printer."""
+    runner = JobRunner()
+    try:
+        metadata = tuple(
+            normalize_metadata(url, runner.video_info(url)) for url in urls
+        )
+        plan = build_job_plan(tuple(urls), destination, settings, clip, (), metadata)
+    except (ValidationError, CoreYt4kError) as error:
+        die(str(error))
+        return
+
+    bars: dict = {}
+    cancel = CancellationToken()
+
+    def emit(event) -> None:
+        if VERBOSE:
+            return
+        _present_progress(bars, event)
+
+    try:
+        results = runner.run(plan, emit, cancel)
+    except KeyboardInterrupt:
+        cancel.cancel()
+        raise
+
+    for key, bar in list(bars.items()):
+        bar.done("")
+    for result in results:
+        if result.status == "success":
+            print(f"\n  {C.green}✓{C.reset} {C.bold}{result.output_path.name}{C.reset}")
+            print(f"    {C.grey}{tilde(result.output_path.parent)}{C.reset}\n")
+        elif result.status == "cancelled":
+            print(f"\n  {C.yellow}cancelled{C.reset}  {result.url}\n")
+        else:
+            print(f"\n  {C.red}✗{C.reset} {result.url}: {result.message}\n",
+                  file=sys.stderr)
+    if any(r.status == "failed" for r in results):
+        sys.exit(1)
+
+
 def main() -> None:
     global VERBOSE, SESSION_DIR
 
@@ -1952,6 +2028,8 @@ def main() -> None:
         s["hardware"] = True
     if args.keep_source:
         s["keep_source"] = True
+    s["recent_dirs"] = tuple(s.get("recent_dirs") or ())
+    settings = Settings(**s)
 
     if args.explain:
         print(f"  {C.bold}understood as{C.reset}")
@@ -1972,8 +2050,7 @@ def main() -> None:
         interactive()
         return
 
-    for url in urls:
-        run_job(url, s, clip)
+    run_one_shot(urls, settings, clip, active_dir(s))
 
 
 if __name__ == "__main__":
