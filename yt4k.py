@@ -23,9 +23,14 @@ Plain English works too, on the command line or in the paste box:
 Requires: yt-dlp and ffmpeg on PATH.
     brew install yt-dlp ffmpeg      # macOS
 
-Downloads land in ~/Downloads/YouTube 4K by default (created if missing).
-Press [f] — or pass -o DIR — to send just this session somewhere else without
-touching that default. Settings persist in ~/.config/yt4k/config.json.
+Every interactive session opens by asking where to save, with your default
+highlighted — enter accepts it, [d] on another folder makes that the default.
+Press [f] later, or pass -o DIR, to redirect a session without touching the
+default. Downloads land in ~/Downloads/YouTube 4K until you change that;
+settings persist in ~/.config/yt4k/config.json.
+
+The interactive page draws on the terminal's alternate screen, so it redraws
+in place and leaves your scrollback exactly as it found it.
 """
 
 import argparse
@@ -40,11 +45,17 @@ import tempfile
 import termios
 import time
 import tty
+from dataclasses import asdict, replace
 from pathlib import Path
 
 # During the compatibility migration this script remains the public entrypoint
 # while also exposing the adjacent shared package as ``yt4k.*``.
 __path__ = [str(Path(__file__).with_name("yt4k"))]
+
+from yt4k.models import Settings, ValidationError, Yt4kError as CoreYt4kError
+from yt4k.parsing import Clip as CoreClip, parse_clip as core_parse_clip
+from yt4k.parsing import parse_request as core_parse_request
+from yt4k.settings import SettingsStore
 
 DEFAULT_OUTPUT_DIR = "~/Downloads/YouTube 4K"
 CONFIG_PATH = Path("~/.config/yt4k/config.json").expanduser()
@@ -126,10 +137,50 @@ def width() -> int:
     return max(shutil.get_terminal_size((80, 24)).columns, 40)
 
 
+def height() -> int:
+    return max(shutil.get_terminal_size((80, 24)).lines, 12)
+
+
 def tilde(p: Path | str) -> str:
     s = str(p)
     home = str(Path.home())
     return "~" + s[len(home):] if s.startswith(home) else s
+
+
+def fit(text: str, limit: int) -> str:
+    """Clip a path to `limit` columns, keeping the end — a wrapped path is
+    worse than a shortened one, and the leaf folder is the part you read."""
+    return text if len(text) <= limit else "…" + text[-(limit - 1):]
+
+
+ANSI = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
+
+
+def clip(text: str, cols: int) -> str:
+    """Cut a line to `cols` visible columns, counting no colour codes.
+
+    Every screen budgets its rows against the window height, so a single line
+    long enough to wrap would silently cost two rows and push the bottom of
+    the page off the screen.
+    """
+    if len(ANSI.sub("", text)) <= cols:
+        return text
+    out, shown, i = [], 0, 0
+    while i < len(text) and shown < cols:
+        code = ANSI.match(text, i)
+        if code:
+            out.append(code.group())
+            i = code.end()
+            continue
+        out.append(text[i])
+        shown += 1
+        i += 1
+    return "".join(out) + C.reset
+
+
+def say(text: str = "") -> None:
+    """print(), clipped to the window so screen layouts stay one row per line."""
+    print(clip(text, width()))
 
 
 class Bar:
@@ -840,7 +891,10 @@ def run_job(url: str, s: dict, clip: Clip | None = None) -> Path:
 
     cut = None
     if clip:
-        start, end = clip.resolve(dur)
+        try:
+            start, end = clip.resolve(dur)
+        except ValidationError as e:
+            die(str(e))
         # ffmpeg chokes on an open-ended section, and we already know how long
         # the video is — so "to the end" becomes a real timestamp here.
         to_end = end is None
@@ -1051,8 +1105,52 @@ def read_key() -> str:
 
 # -------------------------------------------------------------------- screens
 
+ALT_SCREEN = False
+
+# The logo, and the screen height below which it is folded into one line so
+# the page it heads still fits without scrolling.
+LOGO = (
+    "█   █  █████  █   █  █   █",
+    "█   █    █    █   █  █  █ ",
+    " █ █     █    █   █  █ █  ",
+    "  █      █    █████  ██   ",
+    "  █      █        █  █ █  ",
+    "  █      █        █  █  █ ",
+    "  █      █        █  █   █",
+)
+LOGO_MIN_ROWS = 30
+
+
+def enter_full_screen() -> None:
+    """Move the downloader onto the terminal's alternate screen.
+
+    On the main screen every redraw pushes the old frame into scrollback, so a
+    session leaves a trail of blank gaps and stacked logos behind it. The
+    alternate screen has no scrollback of its own: the page redraws in place,
+    and quitting hands back the terminal exactly as it was found.
+    """
+    global ALT_SCREEN
+    if not sys.stdout.isatty():
+        return
+    sys.stdout.write("\033[?1049h\033[H\033[2J")
+    sys.stdout.flush()
+    ALT_SCREEN = True
+
+
+def leave_full_screen() -> None:
+    global ALT_SCREEN
+    if not ALT_SCREEN:
+        return
+    sys.stdout.write("\033[?1049l\033[?25h")
+    sys.stdout.flush()
+    ALT_SCREEN = False
+
+
 def clear() -> None:
-    sys.stdout.write("\033[2J\033[H")
+    # \033[3J drops the scrollback as well. It is redundant on the alternate
+    # screen, but on a terminal that refused it a bare 2J only scrolls the old
+    # frame out of sight — which is what stacked the logos in the first place.
+    sys.stdout.write("\033[H\033[2J" if ALT_SCREEN else "\033[H\033[2J\033[3J")
     sys.stdout.flush()
 
 
@@ -1060,21 +1158,21 @@ def rule(char: str = "─") -> str:
     return C.grey + char * (width() - 4) + C.reset
 
 
+def banner_rows() -> int:
+    """How many lines banner() is about to take."""
+    return len(LOGO) + 2 if height() >= LOGO_MIN_ROWS else 2
+
+
 def banner() -> None:
     inner = width() - 4
-    logo = (
-        "█   █  █████  █   █  █   █",
-        "█   █    █    █   █  █  █ ",
-        " █ █     █    █   █  █ █  ",
-        "  █      █    █████  ██   ",
-        "  █      █        █  █ █  ",
-        "  █      █        █  █  █ ",
-        "  █      █        █  █   █",
-    )
-    for line in logo:
-        print(f"  {C.red}{C.bold}{line}{C.reset}")
-    print(f"  {C.dim}YOUTUBE DOWNLOADER{C.reset}")
-    print(f"  {C.grey}{'─' * inner}{C.reset}")
+    if height() < LOGO_MIN_ROWS:
+        say(f"  {C.red}{C.bold}YT4K{C.reset}  {C.dim}YOUTUBE DOWNLOADER{C.reset}")
+        say(f"  {C.grey}{'─' * inner}{C.reset}")
+        return
+    for line in LOGO:
+        say(f"  {C.red}{C.bold}{line}{C.reset}")
+    say(f"  {C.dim}YOUTUBE DOWNLOADER{C.reset}")
+    say(f"  {C.grey}{'─' * inner}{C.reset}")
 
 
 def chip(label: str, color: str = C.grey) -> str:
@@ -1093,42 +1191,35 @@ SAMPLE_URL = "https://youtu.be/dQw4w9WgXcQ"
 # the syntax is only useful if you never have to go looking for it.
 EXAMPLES = [
     ("youtu.be/…  2:10 to 4:05", "exports only that slice"),
-    ("youtu.be/…  12:00 to the end in 1080p", "or 'start to 4:05' for the open"),
     ("youtu.be/…  just the audio as mp3 320k", "audio only, in plain English"),
+    ("youtu.be/…  12:00 to the end in 1080p", "or 'start to 4:05' for the open"),
     ("youtu.be/…  first 30s h265 small file", "a clip, in the format you want"),
 ]
 
 PLACEHOLDER = f"paste a link…   e.g.  {SAMPLE_URL}  2:10 to 4:05  1080p mp4"
 
 
-def home(s: dict, note: str = "", recent: list[str] | None = None) -> None:
+def home(s: dict, note: str = "",
+         recent: list[tuple[str, str]] | None = None) -> None:
+    """Draw the downloader page as exactly one screenful.
+
+    Every block below is optional, and drops out as the window gets shorter.
+    Overflowing even by a line scrolls the input box off the bottom and splits
+    the logo across two frames, which is the mess this page used to make.
+    """
+    rows = height()
+    roomy = rows >= 24
     banner()
-    print()
-    print(f"  {C.red}DOWNLOAD DESK{C.reset}")
-    print(f"  {C.bold}Idle — downloader ready{C.reset}  "
-          f"{C.dim}Paste a YouTube link to begin.{C.reset}")
-    scope = (f"  {C.cyan}this session{C.reset}" if SESSION_DIR else
-             f"  {C.dim}[f] to change{C.reset}")
-    print(f"  {C.dim}OUTPUT{C.reset}  {tilde(active_dir(s))}{scope}")
-    print(f"  {rule()}")
-    print()
-    count = len(recent or [])
-    noun = "item" if count == 1 else "items"
-    print(f"  {C.bold}QUEUE{C.reset}  {C.dim}{count} {noun}{C.reset}")
-    if recent:
-        for item in recent[-3:]:
-            print(f"  {item[:max(width() - 4, 20)]}")
-    else:
-        print(f"  {C.dim}Queue is empty — paste a link below to add one.{C.reset}")
-    print()
-    print(f"  {C.bold}What are we downloading?{C.reset}")
-    print(f"  {C.dim}Paste a link — then just say what you want after it, in plain English.{C.reset}")
-    for example, what in EXAMPLES:
-        print(f"    {C.grey}{example:<40}{C.reset}{C.dim}{what}{C.reset}")
-    print(f"  {C.dim}[?] lists every word it understands.{C.reset}")
-    print(f"  {C.grey}{'─' * max(width() - 4, 20)}{C.reset}")
-    if note:
-        print(f"  {C.red}!{C.reset} {note}")
+    if roomy:
+        say()
+    if rows >= 34:
+        say(f"  {C.red}DOWNLOAD DESK{C.reset}  "
+            f"{C.dim}idle — paste a link to begin{C.reset}")
+
+    scope = (f"{C.cyan}this session{C.reset}" if SESSION_DIR else
+             f"{C.dim}[f] to change{C.reset}")
+    where = fit(tilde(active_dir(s)), max(width() - 28, 20))
+    say(f"  {C.dim}OUTPUT {C.reset}  {where}  {scope}")
     res = {2160: "4K", 1440: "1440p", 1080: "1080p"}.get(s["res"], res_label(s["res"]))
     quality = "  ".join(
         f"{C.red}{C.bold}[{label}]{C.reset}" if label == res else f"{C.dim}{label}{C.reset}"
@@ -1136,50 +1227,65 @@ def home(s: dict, note: str = "", recent: list[str] | None = None) -> None:
     )
     video = f"{C.red}{C.bold}[VIDEO]{C.reset}" if s["mode"] == "video" else f"{C.dim}VIDEO{C.reset}"
     audio = f"{C.red}{C.bold}[AUDIO ONLY]{C.reset}" if s["mode"] == "audio" else f"{C.dim}AUDIO ONLY{C.reset}"
-    print(f"  {C.dim}QUALITY{C.reset}  {quality}    {C.dim}FORMAT{C.reset}  {video}  {audio}")
-    print(f"  {rule()}")
-    print(f"  {C.dim}[s]{C.reset} settings  {C.dim}[f]{C.reset} save to  "
-          f"{C.dim}[o]{C.reset} open folder  {C.dim}[:]{C.reset} commands  "
-          f"{C.dim}[?]{C.reset} help  {C.dim}[esc]{C.reset} quit")
+    say(f"  {C.dim}QUALITY{C.reset}  {quality}    {C.dim}FORMAT{C.reset}  {video}  {audio}")
+    say(f"  {rule()}")
+
+    shown = 3 if rows >= 32 else (2 if rows >= 26 else 0)
+    if recent and shown:
+        if roomy:
+            say()
+        say(f"  {C.bold}THIS SESSION{C.reset}  {C.dim}{len(recent)} done{C.reset}")
+        for mark, text in recent[-shown:]:
+            say(f"  {mark} {fit(text, max(width() - 8, 20))}")
+
+    if roomy:
+        say()
+    say(f"  {C.dim}Paste a link — then say what you want after it, "
+        f"in plain English.{C.reset}")
+    for example, what in EXAMPLES[:4 if rows >= 34 else 2 if rows >= 22 else 0]:
+        say(f"    {C.grey}{example:<40}{C.reset}{C.dim}{what}{C.reset}")
+    say(f"  {rule()}")
+    say(f"  {C.dim}[s]{C.reset} settings  {C.dim}[f]{C.reset} save to  "
+        f"{C.dim}[o]{C.reset} open folder  {C.dim}[:]{C.reset} commands  "
+        f"{C.dim}[?]{C.reset} help  {C.dim}[esc]{C.reset} quit")
+    if note:
+        say(f"  {note}")
 
 
-def help_screen() -> None:
-    clear()
-    banner()
-    lines = [
+def help_body() -> list[list[str]]:
+    """The help text, one list of printable lines per section."""
+    out: list[list[str]] = []
+
+    def section(title: str, blurb: str, pairs, pad: int) -> None:
+        block = [f"  {C.red}{title}{C.reset}  {C.grey}{blurb}{C.reset}"]
+        for left, right in pairs:
+            block.append(f"  {C.cyan}{left:<{pad}}{C.reset}{C.grey}{right}{C.reset}")
+        out.append(block)
+
+    section("KEYS", "on the downloader page", (
         ("paste a link", "downloads it with your current settings"),
         ("several links", "paste them space-separated to queue a batch"),
         ("link + words", "say what you want after the link — see below"),
         ("1 / 2 / 3", "use 4K, 1440p, or 1080p for new downloads"),
         ("v / a", "switch between video and audio-only mode"),
         ("s", "settings — resolution, codec, audio format, folder"),
-        ("f", "pick where this session saves — enter for now, d for always"),
+        ("f", "change where this session saves — d makes it the default"),
         ("o", "open the download folder in Finder"),
         (":", "open the command palette"),
         ("h", "this screen"),
         ("esc / q / ctrl-d", "leave the downloader from the home screen"),
         ("ctrl-l", "redraw the screen — useful after a terminal resize"),
         ("ctrl-c", "cancel the active download; from home, leave the app"),
-    ]
-    print()
-    for k, v in lines:
-        print(f"  {C.cyan}{k:<18}{C.reset}{C.grey}{v}{C.reset}")
-    print()
-    print(f"  {C.red}CLIPS{C.reset}  {C.grey}add a time range after the link "
-          f"and only that slice is exported{C.reset}")
-    for syntax, means in (
+    ), 18)
+    section("CLIPS", "add a time range after the link", (
         ("2:10 to 4:05  ·  2:10-4:05", "from 2:10 until 4:05"),
         ("1h02m to 1h05m30s", "hours / minutes / seconds spelled out"),
         ("2:10 to the end  ·  from 12:00", "that point through to the end"),
         ("start to 4:05  ·  until 0:45", "the beginning up to that point"),
         ("first 30s  ·  last 90s", "relative to the start or the end"),
         ("90 to 225", "bare numbers are seconds"),
-    ):
-        print(f"  {C.cyan}{syntax:<28}{C.reset}{C.grey}{means}{C.reset}")
-    print()
-    print(f"  {C.red}FORMAT WORDS{C.reset}  {C.grey}mix any of these into the "
-          f"same line, in any order{C.reset}")
-    for group, words in (
+    ), 32)
+    section("FORMAT WORDS", "mix these into one line, in any order", (
         ("quality", "4k · 1440p · 1080p · 720p · 480p · best quality"),
         ("codec", "av1 · vp9 · h264 · h265 / hevc · keep source"),
         ("re-encode", "'convert to h264' re-encodes; bare 'h264' just "
@@ -1187,21 +1293,65 @@ def help_screen() -> None:
         ("file type", "mp4 · mkv"),
         ("audio", "just the audio · mp3 · wav · flac · m4a · opus · 320k"),
         ("shorthand", "fast · smaller file · high quality"),
-    ):
-        print(f"  {C.cyan}{group:<12}{C.reset}{C.grey}{words}{C.reset}")
-    print(f"\n  {C.grey}'keep source' never re-encodes — fastest, and exactly "
-          f"what YouTube served.{C.reset}")
-    print(f"\n  {C.dim}press any key to return · esc also returns{C.reset}")
+        ("keep source", "never re-encodes — fastest, and exactly what "
+                        "YouTube sent"),
+    ), 12)
+    return out
+
+
+def paginate(blocks: list[list[str]], per: int) -> list[list[str]]:
+    """Pack sections into pages of at most `per` lines.
+
+    Breaking between sections rather than every `per` lines keeps a heading
+    from being stranded at the foot of a page with none of its rows.
+    """
+    pages: list[list[str]] = []
+    page: list[str] = []
+    for block in blocks:
+        for chunk in ([block] if len(block) <= per else
+                      [block[i:i + per] for i in range(0, len(block), per)]):
+            spaced = chunk if not page else [""] + chunk
+            if page and len(page) + len(spaced) > per:
+                pages.append(page)
+                page = list(chunk)
+            else:
+                page += spaced
+    if page:
+        pages.append(page)
+    return pages or [[]]
+
+
+def help_screen() -> None:
+    """Shortcuts and syntax, paged to fit the window rather than scrolling."""
+    blocks = help_body()
+    page = 0
     with KeyMode():
-        read_key()
+        while True:
+            # -3 leaves room for the footer and its trailing newline: filling
+            # the last row scrolls the top of the logo away.
+            pages = paginate(blocks, max(height() - banner_rows() - 3, 6))
+            page = min(page, len(pages) - 1)
+            clear()
+            banner()
+            for line in pages[page]:
+                say(line)
+            if len(pages) > 1:
+                say(f"\n  {C.dim}page {page + 1}/{len(pages)} · space or ↓ "
+                    f"for more · esc to return{C.reset}")
+            else:
+                say(f"\n  {C.dim}press any key to return{C.reset}")
+            k = read_key()
+            if k in ("esc", "q", "ctrl-d") or len(pages) == 1:
+                return
+            page = ((page - 1) if k in ("up", "left") else (page + 1)) % len(pages)
 
 
 def command_palette() -> str:
     """A lightweight command palette — familiar to terminal coding tools."""
     clear()
     banner()
-    print()
-    print(f"  {C.red}COMMAND PALETTE{C.reset}  {C.dim}press a key to run an action{C.reset}\n")
+    say()
+    say(f"  {C.red}COMMAND PALETTE{C.reset}  {C.dim}press a key to run an action{C.reset}\n")
     commands = [
         ("s", "Settings", "quality, format, encoder, destination"),
         ("f", "Save to", "pick the folder for this session"),
@@ -1212,8 +1362,11 @@ def command_palette() -> str:
         ("q", "Quit YT4K", "return to your terminal"),
     ]
     for key, title, detail in commands:
-        print(f"  {C.red}[{key}]{C.reset}  {C.bold}{title:<16}{C.reset} {C.grey}{detail}{C.reset}")
-    print(f"\n  {C.dim}esc to return{C.reset}")
+        # Pad the bracketed key, not the bare one, or '[1 / 2 / 3]' shunts its
+        # whole row out of the column.
+        say(f"  {C.red}{f'[{key}]':<12}{C.reset}{C.bold}{title:<16}{C.reset}"
+            f"{C.grey}{detail}{C.reset}")
+    say(f"\n  {C.dim}esc to return{C.reset}")
     with KeyMode():
         key = read_key()
     return "" if key == "esc" else key
@@ -1244,13 +1397,13 @@ def read_command() -> str:
             if key == "enter":
                 if not value:
                     ghost(False)
-                print()
+                say()
                 return "".join(value).strip()
             if key in ("esc", "ctrl-d", "ctrl-l"):
                 # ctrl-l lets the main loop redraw a clean interface.
                 if not value:
                     ghost(False)
-                print()
+                say()
                 return key
             if key == "backspace":
                 if value:
@@ -1343,20 +1496,19 @@ def settings_screen(s: dict) -> dict:
         table = rows()
         clear()
         banner()
-        print(f"  {C.red}YT4K SETTINGS{C.reset}")
-        print(f"  {C.grey}↑↓ move    ←→ change    enter save    esc / ctrl-d cancel"
-              f"{C.reset}\n")
+        say(f"  {C.red}YT4K SETTINGS{C.reset}")
+        say(f"  {C.grey}↑↓ move · ←→ change · enter save · esc cancel{C.reset}\n")
         for i, (key, label, val, active) in enumerate(table):
             marker = f"{C.cyan}›{C.reset}" if i == cur else " "
             name = f"{label:<25}"
             if not active:
-                print(f"  {marker} {C.dim}{name}{val}{C.reset}")
+                say(f"  {marker} {C.dim}{name}{val}{C.reset}")
             elif i == cur:
-                print(f"  {marker} {C.bold}{name}{C.reset}"
-                      f"{C.cyan}‹ {val} ›{C.reset}")
+                say(f"  {marker} {C.bold}{name}{C.reset}"
+                    f"{C.cyan}‹ {val} ›{C.reset}")
             else:
-                print(f"  {marker} {C.grey}{name}{C.reset}{val}")
-        print()
+                say(f"  {marker} {C.grey}{name}{C.reset}{val}")
+        say()
 
         k = read_key()
         if k == "up":
@@ -1397,11 +1549,15 @@ def ask_path(prompt: str, keys: KeyMode) -> str:
     return raw.replace("\\ ", " ").strip("'\"")
 
 
-def folder_screen(s: dict) -> str | None:
+def folder_screen(s: dict, *, session_start: bool = False) -> str | None:
     """Pick where this session's downloads land.
 
     Enter uses the folder for this session only; [d] also makes it the saved
     default. Returns a note for the home screen, or None if nothing changed.
+
+    ``session_start`` is the copy shown once per session, before the home
+    screen — asking beats a saved default nobody remembers changing, so the
+    first thing every session settles is where the files are going to land.
     """
     global SESSION_DIR
     cur = 0
@@ -1416,30 +1572,36 @@ def folder_screen(s: dict) -> str | None:
             cur = min(cur, len(rows) - 1)
             clear()
             banner()
-            print(f"  {C.red}DOWNLOAD FOLDER{C.reset}  "
-                  f"{C.dim}where this session's files land{C.reset}")
-            print(f"  {C.grey}↑↓ move    enter use for this session    "
-                  f"d also save as default    esc cancel{C.reset}\n")
+            if session_start:
+                say(f"  {C.red}WHERE SHOULD THIS SESSION SAVE?{C.reset}  "
+                    f"{C.dim}enter takes the highlighted one{C.reset}")
+            else:
+                say(f"  {C.red}DOWNLOAD FOLDER{C.reset}  "
+                    f"{C.dim}where this session's files land{C.reset}")
+            keep = "keep the default" if session_start else "cancel"
+            say(f"  {C.grey}↑↓ move · enter use it here · d make it the "
+                f"default · esc {keep}{C.reset}\n")
             active = str(active_dir(s))
+            label_w = max(width() - 26, 20)
             for i, (path, tag) in enumerate(rows):
                 marker = f"{C.cyan}›{C.reset}" if i == cur else " "
                 if path is None:
                     label, note = "type or paste a path…", ""
                 else:
-                    label = tilde(Path(path).expanduser())
+                    label = fit(tilde(Path(path).expanduser()), label_w)
                     note = tag
                     if str(Path(path).expanduser()) == active:
                         note = f"{tag} · in use now" if tag else "in use now"
                 if i == cur:
-                    print(f"  {marker} {C.bold}{label:<44}{C.reset}"
-                          f"{C.grey}{note}{C.reset}")
+                    say(f"  {marker} {C.bold}{label:<{label_w}}{C.reset}"
+                        f"  {C.grey}{note}{C.reset}")
                 else:
-                    print(f"  {marker} {C.grey}{label:<44}{note}{C.reset}")
+                    say(f"  {marker} {C.grey}{label:<{label_w}}  {note}{C.reset}")
             if SESSION_DIR:
-                print(f"\n  {C.dim}this session is writing to{C.reset} "
-                      f"{tilde(Path(SESSION_DIR).expanduser())}"
-                      f"{C.grey}, not the default{C.reset}")
-            print()
+                say(f"\n  {C.dim}this session is writing to{C.reset} "
+                    f"{tilde(Path(SESSION_DIR).expanduser())}"
+                    f"{C.grey}, not the default{C.reset}")
+            say()
 
             k = read_key()
             if k == "up":
@@ -1456,18 +1618,25 @@ def folder_screen(s: dict) -> str | None:
                 try:
                     path.mkdir(parents=True, exist_ok=True)
                 except OSError as e:
-                    print(f"  {C.red}!{C.reset} can't use that folder: {e}")
+                    say(f"  {C.red}!{C.reset} can't use that folder: {e}")
                     read_key()
                     continue
-                SESSION_DIR = None if k == "d" else chosen
                 if k == "d":
                     s["output_dir"] = chosen
+                # Picking the folder that is already the default is not an
+                # override — leave SESSION_DIR clear so the home screen keeps
+                # saying so.
+                SESSION_DIR = None if k == "d" or chosen == s["output_dir"] \
+                    else chosen
                 remember_dir(s, chosen)
                 where = tilde(path)
-                return (f"{C.green}✓{C.reset} saving to {where} "
-                        f"{C.grey}(default from now on){C.reset}" if k == "d"
-                        else f"{C.green}✓{C.reset} saving to {where} "
-                             f"{C.grey}(this session){C.reset}")
+                if k == "d":
+                    tag = "default from now on"
+                elif SESSION_DIR:
+                    tag = "this session"
+                else:
+                    tag = "your default"
+                return f"{C.green}✓{C.reset} saving to {where} {C.grey}({tag}){C.reset}"
             elif k in ("esc", "q", "ctrl-d"):
                 return None
 
@@ -1514,26 +1683,26 @@ def quick_job_screen(s: dict, count: int, clip: Clip | None = None,
             clear()
             banner()
             what = "this link" if count == 1 else f"these {count} links"
-            print(f"  {C.red}BEFORE WE GRAB{C.reset}  {C.dim}{what}{C.reset}")
-            print(f"  {C.grey}↑↓ move    ←→ change    v/a format    1/2/3 quality"
-                  f"    enter start    esc cancel{C.reset}\n")
+            say(f"  {C.red}BEFORE WE GRAB{C.reset}  {C.dim}{what}{C.reset}")
+            say(f"  {C.grey}↑↓ move · ←→ change · v/a format · 1/2/3 quality · "
+                f"enter start · esc cancel{C.reset}\n")
             if clip:
-                print(f"  {C.cyan}✂ clip{C.reset}     {C.bold}"
-                      f"{clip.label()}{C.reset}")
+                say(f"  {C.cyan}✂ clip{C.reset}     {C.bold}"
+                    f"{clip.label()}{C.reset}")
             if chips:
-                print(f"  {C.dim}from your words{C.reset}  "
-                      + " ".join(f"{C.cyan}{c}{C.reset}" for c in chips))
+                say(f"  {C.dim}from your words{C.reset}  "
+                    + " ".join(f"{C.cyan}{c}{C.reset}" for c in chips))
             if clip or chips:
-                print()
+                say()
             for i, (key, label, val) in enumerate(table):
                 marker = f"{C.cyan}›{C.reset}" if i == cur else " "
                 name = f"{label:<11}"
                 if i == cur:
-                    print(f"  {marker} {C.bold}{name}{C.reset}"
-                          f"{C.cyan}‹ {val} ›{C.reset}")
+                    say(f"  {marker} {C.bold}{name}{C.reset}"
+                        f"{C.cyan}‹ {val} ›{C.reset}")
                 else:
-                    print(f"  {marker} {C.grey}{name}{C.reset}{val}")
-            print()
+                    say(f"  {marker} {C.grey}{name}{C.reset}{val}")
+            say()
 
             k = read_key()
             if k == "up":
@@ -1566,9 +1735,32 @@ def open_folder(s: dict) -> None:
 
 
 def interactive() -> None:
-    s = load_settings()
-    note = ""
-    recent: list[str] = []
+    enter_full_screen()
+    try:
+        saved, s = session(load_settings())
+    finally:
+        leave_full_screen()
+    # The page itself lived on the alternate screen and is gone now, so leave
+    # behind the one thing worth keeping: what landed, and where.
+    if saved:
+        word = "file" if saved == 1 else "files"
+        print(f"  {C.green}✓{C.reset} {saved} {word} in "
+              f"{C.bold}{tilde(active_dir(s))}{C.reset}\n")
+    else:
+        print(f"  {C.grey}bye.{C.reset}\n")
+
+
+def session(s: dict) -> tuple[int, dict]:
+    """Run the downloader page until the user leaves.
+
+    Returns how many files were written and the settings as they ended up.
+    """
+    # Ask once, up front, rather than leaving it to a keystroke nobody
+    # remembers pressing: last week's destination is rarely this week's.
+    note = folder_screen(s, session_start=True) or (
+        f"{C.grey}saving to {tilde(active_dir(s))}{C.reset}")
+    recent: list[tuple[str, str]] = []   # (status mark, file or url)
+    saved = 0
     while True:
         # Every other screen clears before drawing; without this the home
         # screen stacked a fresh banner under the last one on each redraw
@@ -1648,14 +1840,15 @@ def interactive() -> None:
             try:
                 final = run_job(url, s, clip)
                 done += 1
-                recent.append(f"{C.green}✓{C.reset} {final.name}")
+                recent.append((f"{C.green}✓{C.reset}", final.name))
             except Yt4kError as e:
                 print(f"\n  {C.red}✗{C.reset} {e}\n")
-                recent.append(f"{C.red}✗{C.reset} {url[:60]}")
+                recent.append((f"{C.red}✗{C.reset}", url))
             except KeyboardInterrupt:
                 sys.stdout.write("\r\033[K")
                 print(f"\n  {C.yellow}cancelled{C.reset}\n")
-                recent.append(f"{C.yellow}•{C.reset} cancelled {url[:55]}")
+                recent.append((f"{C.yellow}•{C.reset}", f"cancelled {url}"))
+        saved += done
         word = "download" if done == 1 else "downloads"
         note = (f"{C.green}✓{C.reset} {done} {word} finished"
                 if done else f"{C.red}nothing downloaded{C.reset}")
@@ -1670,7 +1863,7 @@ def interactive() -> None:
             print()
             break
 
-    print(f"\n  {C.grey}bye.{C.reset}\n")
+    return saved, s
 
 
 # ---------------------------------------------------------------------- main
@@ -1678,7 +1871,11 @@ def interactive() -> None:
 def main() -> None:
     global VERBOSE, SESSION_DIR
 
-    s = load_settings()
+    store = SettingsStore()
+    settings, notice = store.load()
+    if notice:
+        print(f"  {C.yellow}!{C.reset} {notice.message}", file=sys.stderr)
+    s = asdict(settings)
     p = argparse.ArgumentParser(
         description="Interactive YouTube downloader. Run bare for the "
                     "downloader page, or pass a URL for a one-shot download. "
@@ -1720,11 +1917,16 @@ def main() -> None:
 
     # Plain English first, so explicit flags below always win over words.
     raw = " ".join(args.words)
-    urls, s, clip, chips = parse_request(raw, s)
+    parsed_request = core_parse_request(raw, settings)
+    urls = list(parsed_request.urls)
+    settings = parsed_request.settings
+    s = asdict(settings)
+    clip = parsed_request.clip
+    chips = list(parsed_request.modifiers)
     if args.clip:
-        parsed, leftover = parse_clip(args.clip)
+        parsed, _leftover = core_parse_clip(args.clip)
         if parsed is None:
-            parsed, _ = parse_clip(f"from {args.clip}")
+            parsed, _ = core_parse_clip(f"from {args.clip}")
         if parsed is None:
             p.error(f"couldn't read a time range from --clip {args.clip!r} "
                     f"(try 1:20-3:45, 'from 12:00', or 'last 90s')")
@@ -1778,9 +1980,15 @@ if __name__ == "__main__":
     try:
         main()
     except Yt4kError as e:
+        leave_full_screen()
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
+        leave_full_screen()
         sys.stdout.write("\r\033[K")
         print("cancelled", file=sys.stderr)
         sys.exit(130)
+    except BaseException:
+        # A traceback printed onto the alternate screen vanishes with it.
+        leave_full_screen()
+        raise
