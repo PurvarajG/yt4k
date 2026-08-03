@@ -1,0 +1,67 @@
+/* Focused-workbench visual system: compact, keyboard-first, no decoration. */
+
+Screen {
+    background: $surface;
+    color: $text;
+}
+
+WorkbenchHeader {
+    background: $panel;
+    color: $text;
+    text-style: bold;
+}
+
+ContextFooter {
+    background: $panel;
+    color: $text-muted;
+}
+
+#screen-body {
+    padding: 1 2;
+}
+
+#resize-message {
+    color: $error;
+    text-style: bold;
+}
+
+Screen.size-blocked #resize-message {
+    display: block;
+}
+
+Screen.size-blocked #screen-body {
+    display: none;
+}
+
+.focused {
+    border: round $accent;
+}
+
+.default-tag, .recent-tag {
+    color: $text-muted;
+    text-style: bold;
+}
+
+.error-text {
+    color: $error;
+    text-style: bold;
+}
+
+/* Narrow terminals: metadata moves beneath its value; footer hints reduce. */
+Screen.narrow #screen-body {
+    padding: 0 1;
+}
+
+/* Short terminals: supporting copy and subtitles disappear first. */
+Screen.short .subtitle,
+Screen.short .supporting-copy {
+    display: none;
+}
+
+/* NO_COLOR / low-colour terminals: readable monochrome hierarchy. */
+Screen.monochrome WorkbenchHeader {
+    text-style: bold underline;
+}
+Screen.monochrome .focused {
+    border: round white;
+}
