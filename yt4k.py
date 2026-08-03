@@ -42,6 +42,10 @@ import time
 import tty
 from pathlib import Path
 
+# During the compatibility migration this script remains the public entrypoint
+# while also exposing the adjacent shared package as ``yt4k.*``.
+__path__ = [str(Path(__file__).with_name("yt4k"))]
+
 DEFAULT_OUTPUT_DIR = "~/Downloads/YouTube 4K"
 CONFIG_PATH = Path("~/.config/yt4k/config.json").expanduser()
 VERBOSE = False

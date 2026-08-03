@@ -1,7 +1,7 @@
 # Usable Textual CLI execution checklist
 
 - [x] Task 1: Freeze public behavior and establish tests
-- [ ] Task 2: Add typed settings and safe migration
+- [x] Task 2: Add typed settings and safe migration
 - [ ] Task 3: Extract parsing and immutable planning
 - [ ] Task 4: Emit structured job events and support cancellation
 - [ ] Task 5: Build the Textual shell and theme
