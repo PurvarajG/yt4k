@@ -7,8 +7,10 @@ destination, paste a link, review what yt4k understood, and download.
 ## Install
 
 Requires **Python 3.10+**, [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and
-`ffmpeg`. The installer also installs [Textual](https://textual.textualize.io/),
-which powers the interactive workbench.
+`ffmpeg`. The installer creates a dedicated venv at
+`~/.local/share/yt4k/venv` for yt4k's own Python dependency
+([Textual](https://textual.textualize.io/)), so it never fights your system,
+Homebrew, or conda Python.
 
 ```bash
 git clone https://github.com/PurvarajG/yt4k.git
@@ -19,9 +21,10 @@ cd yt4k
 The installer:
 - installs `yt-dlp` and `ffmpeg` (via Homebrew on macOS, via pip + your
   package manager on Linux) if they're missing
+- creates `~/.local/share/yt4k/venv` and installs Textual into it
 - adds a `yt4k` launcher to `~/.local/bin` that runs `yt4k.py` straight out
-  of this folder — so keep the folder where it is, and `git pull` alone is
-  enough to update
+  of this folder, using that venv's `python3` — so keep the folder where it
+  is, and `git pull` alone is enough to update
 - removes `~/yt4k.py` if an older install left that copy behind
 
 If `~/.local/bin` isn't already on your `PATH`, the installer tells you the
