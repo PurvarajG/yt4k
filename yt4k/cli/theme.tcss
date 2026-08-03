@@ -47,6 +47,31 @@ Screen.size-blocked #screen-body {
     text-style: bold;
 }
 
+#download-items {
+    height: auto;
+    max-height: 60%;
+}
+
+.download-item {
+    height: auto;
+    padding: 0 0 1 0;
+    border-bottom: solid $panel;
+}
+
+.item-title {
+    text-style: bold;
+}
+
+.item-status {
+    color: $text-muted;
+}
+
+#download-log {
+    height: auto;
+    max-height: 8;
+    border: round $panel;
+}
+
 /* Narrow terminals: metadata moves beneath its value; footer hints reduce. */
 Screen.narrow #screen-body {
     padding: 0 1;

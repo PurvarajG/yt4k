@@ -55,6 +55,12 @@ class ScriptedRunner(JobRunner):
                               message="Cancelled") for u in plan.urls]
         return self._results
 
+    # DownloadScreen always calls run_concurrent(); for these deterministic,
+    # single-threaded tests it behaves exactly like the scripted run() above
+    # regardless of item count.
+    def run_concurrent(self, plan, emit, cancel, max_workers=4):
+        return self.run(plan, emit, cancel)
+
 
 def make_app(tmp_path, runner):
     store = SettingsStore(tmp_path / "config.json")
@@ -87,9 +93,11 @@ async def test_progress_stage_speed_and_eta_shown(tmp_path):
         runner.ready.wait(timeout=2)
         runner.proceed.set()
         await pilot.pause(0.1)
-        status = str(app.screen.query_one("#download-status").content)
+        status = str(app.screen.query_one("#item-status-0").content)
         assert "50%" in status
         assert "eta" in status.lower()
+        bar = app.screen.query_one("#item-progress-0")
+        assert bar.percentage == pytest.approx(0.5, abs=0.01)
 
 
 @pytest.mark.asyncio
@@ -108,15 +116,15 @@ async def test_unknown_total_bytes_does_not_crash(tmp_path):
         runner.ready.wait(timeout=2)
         runner.proceed.set()
         await pilot.pause(0.1)
-        status = str(app.screen.query_one("#download-status").content)
+        status = str(app.screen.query_one("#item-status-0").content)
         assert "--:--" in status
 
 
 @pytest.mark.asyncio
-async def test_batch_position_shown_for_multiple_urls(tmp_path):
+async def test_each_url_gets_its_own_row_and_progress_bar(tmp_path):
     plan = make_plan(tmp_path, urls=("https://youtu.be/a", "https://youtu.be/b"))
     step = ProgressEvent(item_index=1, item_count=2, stage=JobStage.DOWNLOADING,
-                         fraction=0.1)
+                         fraction=0.4)
     results = [JobResult(url=u, status="success", output_path=tmp_path / "f.mp4",
                          message="Saved") for u in plan.urls]
     runner = ScriptedRunner([step], results)
@@ -124,11 +132,17 @@ async def test_batch_position_shown_for_multiple_urls(tmp_path):
     async with app.run_test() as pilot:
         app.push_screen(DownloadScreen(plan))
         await pilot.pause()
+        # Both rows exist before either has progressed.
+        assert app.screen.query_one("#item-progress-0")
+        assert app.screen.query_one("#item-progress-1")
         runner.ready.wait(timeout=2)
         runner.proceed.set()
         await pilot.pause(0.1)
-        batch = str(app.screen.query_one("#download-batch").content)
-        assert "2/2" in batch
+        # Only item 1's row reflects the event; item 0's is untouched.
+        bar1 = app.screen.query_one("#item-progress-1")
+        assert bar1.percentage == pytest.approx(0.4, abs=0.01)
+        status0 = str(app.screen.query_one("#item-status-0").content)
+        assert "Starting" in status0
 
 
 @pytest.mark.asyncio

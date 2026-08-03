@@ -238,3 +238,103 @@ def test_cleanup_limited_to_current_job_temp_dir(tmp_path):
     leftover_temp_dirs = [p for p in tmp_path.iterdir()
                           if p.is_dir() and p.name.startswith(".yt4k-")]
     assert leftover_temp_dirs == []
+
+
+class KeyedFakeRunner:
+    """A runner whose fake yt-dlp download resolves by URL (the last cmd
+    argument), so multiple items can be driven concurrently and
+    deterministically without depending on call order across threads."""
+
+    def __init__(self, procs_by_url, gate=None):
+        self._procs_by_url = {u: list(p) for u, p in procs_by_url.items()}
+        self.popen_calls = []
+        self._gate = gate  # optional threading.Barrier to prove concurrency
+
+    def which(self, tool):
+        return f"/usr/bin/{tool}"
+
+    def popen(self, cmd, **kwargs):
+        self.popen_calls.append(cmd)
+        if self._gate is not None:
+            self._gate.wait(timeout=2)
+        url = cmd[-1]
+        return self._procs_by_url[url].pop(0)
+
+    def run(self, cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def build(self):
+        return JobRunner(popen=self.popen, run=self.run, which=self.which)
+
+
+def _no_reencode_plan(tmp_path, urls):
+    settings = Settings(codec="source", container="mkv")
+    metadata = tuple(meta(url=u, duration=10.0) for u in urls)
+    return build_job_plan(urls, tmp_path, settings, None, (), metadata)
+
+
+@pytest.fixture
+def _download_writes_mkv(monkeypatch):
+    from yt4k import jobs as jobs_module
+
+    original_fetch = jobs_module.JobRunner._fetch
+
+    def patched(self, url, workdir, fmt, merge, item_index, item_count, stage,
+                emit, cancel, section=None, precise=True):
+        (workdir / "video [id].mkv").write_bytes(b"0" * 32)
+        return original_fetch(self, url, workdir, fmt, merge, item_index,
+                               item_count, stage, emit, cancel, section, precise)
+
+    monkeypatch.setattr(jobs_module.JobRunner, "_fetch", patched)
+    yield
+
+
+def test_run_concurrent_downloads_urls_at_the_same_time(tmp_path, _download_writes_mkv):
+    import threading
+
+    urls = ("https://youtu.be/a", "https://youtu.be/b", "https://youtu.be/c")
+    plan = _no_reencode_plan(tmp_path, urls)
+    gate = threading.Barrier(3, timeout=2)
+    procs = {u: [FakeProc(["YT4K 1000 1000 1000 NA NA"])] for u in urls}
+    fake = KeyedFakeRunner(procs, gate=gate)
+    runner = fake.build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    results = runner.run_concurrent(plan, lambda e: None, CancellationToken())
+
+    assert [r.status for r in results] == ["success", "success", "success"]
+    # The barrier only releases once all three threads reached popen() at
+    # once - if this passed, all three downloads really ran concurrently.
+
+
+def test_run_concurrent_preserves_result_order(tmp_path, _download_writes_mkv):
+    urls = ("https://youtu.be/a", "https://youtu.be/b")
+    plan = _no_reencode_plan(tmp_path, urls)
+    procs = {
+        urls[0]: [FakeProc(["YT4K 1000 1000 1000 NA NA"], returncode=1, stderr="bad")],
+        urls[1]: [FakeProc(["YT4K 1000 1000 1000 NA NA"])],
+    }
+    fake = KeyedFakeRunner(procs)
+    runner = fake.build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    results = runner.run_concurrent(plan, lambda e: None, CancellationToken())
+
+    assert results[0].url == urls[0]
+    assert results[0].status == "failed"
+    assert results[1].url == urls[1]
+    assert results[1].status == "success"
+
+
+def test_run_concurrent_single_url_falls_back_to_run(tmp_path, _download_writes_mkv):
+    urls = ("https://youtu.be/a",)
+    plan = _no_reencode_plan(tmp_path, urls)
+    procs = {urls[0]: [FakeProc(["YT4K 1000 1000 1000 NA NA"])]}
+    fake = KeyedFakeRunner(procs)
+    runner = fake.build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    results = runner.run_concurrent(plan, lambda e: None, CancellationToken())
+
+    assert len(results) == 1
+    assert results[0].status == "success"

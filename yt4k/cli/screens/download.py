@@ -5,15 +5,16 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Static
+from textual.widgets import Button, ProgressBar, Static
 
 from ...jobs import CancellationToken
 from ...models import JobResult, JobStage, ProgressEvent
 from ...planning import JobPlan
 from ..widgets.common import ContextFooter, MinimumSizeGuard, WorkbenchHeader
-from ..widgets.progress import batch_line, status_line
+from ..widgets.progress import stage_label, status_line
 
 LOG_LIMIT = 200
+MAX_CONCURRENT_DOWNLOADS = 4
 
 
 class DownloadFinished(Message):
@@ -23,7 +24,12 @@ class DownloadFinished(Message):
 
 
 class DownloadScreen(Screen):
-    """Runs the job engine and renders its typed progress events."""
+    """Runs the job engine and renders its typed progress events.
+
+    Every URL in the batch gets its own row with a real progress bar, and the
+    whole batch downloads concurrently (capped at MAX_CONCURRENT_DOWNLOADS)
+    instead of one file at a time.
+    """
 
     BINDINGS = [("ctrl+c", "cancel_or_exit", "Cancel")]
 
@@ -36,13 +42,24 @@ class DownloadScreen(Screen):
         self.results: list[JobResult] | None = None
 
     def compose(self) -> ComposeResult:
+        count = len(self.plan.urls)
         yield WorkbenchHeader(screen_label="DOWNLOAD", id="header")
         with Container(id="screen-body"):
-            metadata = self.plan.metadata[0] if self.plan.metadata else None
-            title = metadata.title if metadata else self.plan.urls[0]
-            yield Static(title, id="download-title")
-            yield Static(batch_line_zero(self.plan), id="download-batch")
-            yield Static("Starting...", id="download-status")
+            with VerticalScroll(id="download-items"):
+                for index, url in enumerate(self.plan.urls):
+                    metadata = (self.plan.metadata[index]
+                               if index < len(self.plan.metadata) else None)
+                    title = metadata.title if metadata else url
+                    with Container(id=f"item-{index}", classes="download-item"):
+                        yield Static(title, classes="item-title")
+                        yield ProgressBar(total=100, show_eta=False,
+                                          id=f"item-progress-{index}")
+                        yield Static("Starting...", id=f"item-status-{index}",
+                                    classes="item-status")
+            yield Static(
+                "Downloading..." if count > 1 else "Starting...",
+                id="download-status",
+            )
             with VerticalScroll(id="download-log"):
                 yield Static("", id="download-log-content")
             with Horizontal(id="download-actions"):
@@ -55,18 +72,29 @@ class DownloadScreen(Screen):
 
     @work(thread=True, exclusive=True)
     def _run(self) -> None:
-        results = self.app.runner.run(self.plan, self._emit, self.cancel)
+        results = self.app.runner.run_concurrent(
+            self.plan, self._emit, self.cancel,
+            max_workers=MAX_CONCURRENT_DOWNLOADS,
+        )
         self.app.call_from_thread(self._finished, results)
 
     def _emit(self, event: ProgressEvent) -> None:
         self.app.call_from_thread(self._apply_event, event)
 
     def _apply_event(self, event: ProgressEvent) -> None:
-        self.query_one("#download-batch", Static).update(batch_line(event))
         if self.cancel.is_cancelled:
             return
-        self.query_one("#download-status", Static).update(status_line(event))
-        self._log(status_line(event))
+        try:
+            bar = self.query_one(f"#item-progress-{event.item_index}", ProgressBar)
+            status = self.query_one(f"#item-status-{event.item_index}", Static)
+        except Exception:
+            return
+        bar.update(progress=(event.fraction or 0.0) * 100)
+        if event.stage == JobStage.METADATA:
+            status.update(event.message or stage_label(event))
+        else:
+            status.update(status_line(event))
+        self._log(f"[{event.item_index + 1}/{event.item_count}] {status_line(event)}")
 
     def _log(self, line: str) -> None:
         self._log_lines.append(line)
@@ -81,6 +109,20 @@ class DownloadScreen(Screen):
         self.post_message(DownloadFinished(results))
 
     def _render_final(self, results: list[JobResult]) -> None:
+        for index, result in enumerate(results):
+            try:
+                bar = self.query_one(f"#item-progress-{index}", ProgressBar)
+                status = self.query_one(f"#item-status-{index}", Static)
+            except Exception:
+                continue
+            if result.status == "success":
+                bar.update(progress=100)
+                status.update(f"Done - {result.message}")
+            elif result.status == "cancelled":
+                status.update("Cancelled")
+            else:
+                status.update(f"Failed - {result.message}")
+
         actions = self.query_one("#download-actions", Horizontal)
         actions.remove_children()
         failed = [r for r in results if r.status == "failed"]
@@ -128,8 +170,3 @@ class DownloadScreen(Screen):
             self.query_one("#download-status", Static).update("Cancelling...")
         else:
             self.app.exit_with_summary()
-
-
-def batch_line_zero(plan: JobPlan) -> str:
-    count = len(plan.urls)
-    return f"[1/{count}]" if count else ""

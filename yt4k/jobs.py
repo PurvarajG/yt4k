@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -106,6 +107,7 @@ class JobRunner:
         self._killpg = killpg or (lambda pid, sig: os.killpg(pid, sig))
         self._grace_period = grace_period
         self._active_workdirs: set[Path] = set()
+        self._workdirs_lock = threading.Lock()
 
     def _require(self, tool: str) -> str:
         path = self._which(tool)
@@ -495,7 +497,8 @@ class JobRunner:
 
         plan.destination.mkdir(parents=True, exist_ok=True)
         workdir = Path(tempfile.mkdtemp(dir=plan.destination, prefix=".yt4k-"))
-        self._active_workdirs.add(workdir)
+        with self._workdirs_lock:
+            self._active_workdirs.add(workdir)
         try:
             final = (self._audio_job(url, workdir, plan.destination, plan, dur,
                                       cut, item_index, item_count, emit, cancel)
@@ -509,9 +512,32 @@ class JobRunner:
                               message=f"Saved {final.name}")
         finally:
             # Only ever remove a directory this runner created for this job.
-            if workdir in self._active_workdirs:
-                shutil.rmtree(workdir, ignore_errors=True)
+            with self._workdirs_lock:
+                created_here = workdir in self._active_workdirs
                 self._active_workdirs.discard(workdir)
+            if created_here:
+                shutil.rmtree(workdir, ignore_errors=True)
+
+    def run_item(self, item_index: int, url: str, plan: JobPlan,
+                emit: Callable[[ProgressEvent], None],
+                cancel: CancellationToken) -> JobResult:
+        """Run a single URL from `plan` and return its result.
+
+        Safe to call concurrently from multiple threads for different items
+        of the same plan - each item gets its own temp workdir and mutates no
+        shared state beyond the lock-guarded workdir bookkeeping.
+        """
+        if cancel.is_cancelled:
+            return JobResult(url=url, status="cancelled", output_path=None,
+                             message="Cancelled")
+        try:
+            return self._run_item(item_index, url, plan, emit, cancel)
+        except Cancelled:
+            return JobResult(url=url, status="cancelled", output_path=None,
+                             message="Cancelled")
+        except Yt4kError as error:
+            return JobResult(url=url, status="failed", output_path=None,
+                             message=str(error), technical_detail=str(error))
 
     def run(self, plan: JobPlan, emit: Callable[[ProgressEvent], None],
             cancel: CancellationToken) -> list[JobResult]:
@@ -520,19 +546,25 @@ class JobRunner:
         A cancelled job stops the remaining batch; completed items keep
         their results.
         """
-        results: list[JobResult] = []
-        for item_index, url in enumerate(plan.urls):
-            if cancel.is_cancelled:
-                results.append(JobResult(url=url, status="cancelled",
-                                          output_path=None, message="Cancelled"))
-                continue
-            try:
-                results.append(self._run_item(item_index, url, plan, emit, cancel))
-            except Cancelled:
-                results.append(JobResult(url=url, status="cancelled",
-                                          output_path=None, message="Cancelled"))
-            except Yt4kError as error:
-                results.append(JobResult(url=url, status="failed",
-                                          output_path=None, message=str(error),
-                                          technical_detail=str(error)))
+        return [self.run_item(i, url, plan, emit, cancel)
+                for i, url in enumerate(plan.urls)]
+
+    def run_concurrent(self, plan: JobPlan, emit: Callable[[ProgressEvent], None],
+                       cancel: CancellationToken, max_workers: int = 4) -> list[JobResult]:
+        """Run every URL in `plan` at once (capped at `max_workers`), so a
+        batch downloads together instead of one file at a time.
+
+        Results are returned in the same order as `plan.urls` regardless of
+        completion order.
+        """
+        if len(plan.urls) <= 1:
+            return self.run(plan, emit, cancel)
+        results: list[JobResult | None] = [None] * len(plan.urls)
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(plan.urls))) as pool:
+            futures = {
+                pool.submit(self.run_item, i, url, plan, emit, cancel): i
+                for i, url in enumerate(plan.urls)
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
         return results
