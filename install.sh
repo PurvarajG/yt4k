@@ -54,6 +54,14 @@ if [ "$py_ok" != "1" ]; then
   exit 1
 fi
 
+if ! python3 -c 'import textual' >/dev/null 2>&1; then
+  echo "Installing Textual workbench dependency..."
+  if ! python3 -m pip install -r "$REPO_DIR/requirements.txt"; then
+    echo "Could not install Textual from $REPO_DIR/requirements.txt. Check pip/network access and re-run." >&2
+    exit 1
+  fi
+fi
+
 cp "$REPO_DIR/yt4k.py" "$HOME/yt4k.py"
 
 cat > "$BIN_DIR/yt4k" <<'WRAP'
