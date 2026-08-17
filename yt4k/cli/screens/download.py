@@ -89,7 +89,10 @@ class DownloadScreen(Screen):
             status = self.query_one(f"#item-status-{event.item_index}", Static)
         except Exception:
             return
-        bar.update(progress=(event.fraction or 0.0) * 100)
+        if event.fraction is None:
+            bar.update(total=None)
+        else:
+            bar.update(total=100, progress=event.fraction * 100)
         if event.stage == JobStage.METADATA:
             status.update(event.message or stage_label(event))
         else:

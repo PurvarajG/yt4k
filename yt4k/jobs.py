@@ -42,6 +42,7 @@ MP4_SAFE_VIDEO = {"h264", "hevc", "av1"}
 MP4_SAFE_AUDIO = {"aac", "mp3", "ac3"}
 
 GRACE_PERIOD_SECONDS = 5.0
+POLL_INTERVAL_SECONDS = 0.5
 
 
 def _num(value) -> float | None:
@@ -100,12 +101,14 @@ class JobRunner:
         which: Callable[[str], str | None] = shutil.which,
         killpg: Callable[[int, int], None] | None = None,
         grace_period: float = GRACE_PERIOD_SECONDS,
+        poll_interval: float = POLL_INTERVAL_SECONDS,
     ) -> None:
         self._popen = popen
         self._run = run
         self._which = which
         self._killpg = killpg or (lambda pid, sig: os.killpg(pid, sig))
         self._grace_period = grace_period
+        self._poll_interval = poll_interval
         self._active_workdirs: set[Path] = set()
         self._workdirs_lock = threading.Lock()
 
@@ -265,11 +268,66 @@ class JobRunner:
                 speed=_num(speed), eta=_num(eta),
             ))
 
-        self._stream(cmd, cancel, on_line)
+        if section:
+            # yt-dlp hands --download-sections off to its ffmpeg external
+            # downloader, which only calls its progress hook once, at
+            # completion - never during. Without this, the UI would sit
+            # frozen on whatever stage preceded the fetch for the entire
+            # download. Poll the growing output file on disk instead.
+            stop_poll = threading.Event()
+            poller = threading.Thread(
+                target=self._poll_output_progress,
+                args=(workdir, item_index, item_count, stage, emit, stop_poll),
+                daemon=True,
+            )
+            poller.start()
+            try:
+                self._stream(cmd, cancel, on_line)
+            finally:
+                stop_poll.set()
+                poller.join(timeout=2)
+        else:
+            self._stream(cmd, cancel, on_line)
         files = [p for p in workdir.iterdir() if p.is_file()]
         if not files:
             raise Yt4kError("yt-dlp produced no file")
         return max(files, key=lambda p: p.stat().st_mtime)
+
+    def _poll_output_progress(self, workdir: Path, item_index: int,
+                              item_count: int, stage: JobStage,
+                              emit: Callable[[ProgressEvent], None],
+                              stop: threading.Event,
+                              interval: float | None = None) -> None:
+        """Emit byte-based progress from the growing output file on disk.
+
+        Used as a fallback while a downloader gives no interim progress of
+        its own (see the --download-sections case above). Total size isn't
+        known ahead of time, so `fraction` stays None; the UI shows this as
+        an indeterminate bar with live bytes/speed instead of a percentage.
+        """
+        interval = self._poll_interval if interval is None else interval
+        last_bytes = 0.0
+        last_time = time.time()
+        while not stop.wait(interval):
+            try:
+                files = [p for p in workdir.iterdir() if p.is_file()]
+            except OSError:
+                continue
+            if not files:
+                continue
+            newest = max(files, key=lambda p: p.stat().st_mtime)
+            try:
+                size = float(newest.stat().st_size)
+            except OSError:
+                continue
+            now = time.time()
+            elapsed = now - last_time
+            speed = ((size - last_bytes) / elapsed
+                     if elapsed > 0 and size >= last_bytes else None)
+            last_bytes, last_time = size, now
+            emit(ProgressEvent(item_index=item_index, item_count=item_count,
+                                stage=stage, fraction=None,
+                                downloaded_bytes=size, speed=speed))
 
     def _trim_local(self, src: Path, start: float, end: float | None,
                     item_index: int, item_count: int,

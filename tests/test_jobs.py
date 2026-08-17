@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -141,6 +143,70 @@ def test_ffmpeg_out_time_progress_parsed(tmp_path):
     encode_events = [e for e in events if e.stage == JobStage.ENCODING]
     assert encode_events
     assert encode_events[0].fraction == pytest.approx(0.5)
+
+
+def test_section_download_polls_progress_when_no_native_events(tmp_path):
+    """yt-dlp hands --download-sections off to its ffmpeg external
+    downloader, which only reports progress once, at completion - never
+    during. yt4k must fall back to polling the growing output file, or the
+    bar sits frozen on the previous stage for the whole clipped download."""
+    plan = make_plan(tmp_path, settings=Settings(codec="source", container="mkv"),
+                      clip=Clip(start=1.0, end=5.0))
+    polled = threading.Event()
+
+    def on_wait():
+        assert polled.wait(timeout=2), "poller never emitted progress"
+
+    procs = [FakeProc(["YT4K 32 32 32 NA NA"], on_wait=on_wait)]
+    runner = FakeRunner(procs).build()
+    runner._poll_interval = 0.01
+    runner.probe = lambda path: {"duration": 4.0, "vcodec": "vp9", "acodec": "opus"}
+    runner.supports_sections = lambda: True
+
+    events = []
+
+    def collect(event):
+        events.append(event)
+        if event.stage == JobStage.CLIPPING and event.fraction is None:
+            polled.set()
+
+    results = runner.run(plan, collect, CancellationToken())
+
+    assert results[0].status == "success"
+    polled_events = [e for e in events
+                     if e.stage == JobStage.CLIPPING and e.fraction is None]
+    assert polled_events
+    assert all(e.downloaded_bytes is not None for e in polled_events)
+
+
+def test_poll_output_progress_reports_growing_file_size(tmp_path):
+    runner = FakeRunner([]).build()
+    target = tmp_path / "out.part"
+    target.write_bytes(b"0" * 10)
+
+    events = []
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=runner._poll_output_progress,
+        args=(tmp_path, 0, 1, JobStage.CLIPPING, events.append, stop),
+        kwargs={"interval": 0.01},
+    )
+    thread.start()
+    try:
+        with open(target, "ab") as f:
+            while len(events) < 2:
+                f.write(b"0" * 10)
+                f.flush()
+                time.sleep(0.01)
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert all(e.fraction is None for e in events)
+    sizes = [e.downloaded_bytes for e in events]
+    assert sizes == sorted(sizes)
+    assert sizes[-1] >= 20
 
 
 def test_stderr_tail_captured_on_failure(tmp_path):
