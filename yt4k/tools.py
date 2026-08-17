@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 BUNDLED_FIRST = ("yt-dlp",)
 STATIC_FFMPEG_TOOLS = ("ffmpeg", "ffprobe")
 
 _static_ffmpeg_added = False
+_static_ffmpeg_lock = threading.Lock()
 
 
 def _sibling_of_interpreter(tool: str) -> str | None:
@@ -39,17 +41,25 @@ def _add_static_ffmpeg_to_path() -> None:
     `weak=True` leaves a system ffmpeg alone; on first use with no system
     copy this downloads the static build, which is why the installer warms
     it up rather than letting it happen mid-download.
+
+    Batch downloads run several items concurrently, and each one calls this
+    on its very first step - without the lock, they'd all race into
+    static_ffmpeg's own extraction-to-disk at once and could hand back a
+    half-written binary to whichever item lost the race.
     """
     global _static_ffmpeg_added
     if _static_ffmpeg_added:
         return
-    _static_ffmpeg_added = True
-    try:
-        import static_ffmpeg
+    with _static_ffmpeg_lock:
+        if _static_ffmpeg_added:
+            return
+        _static_ffmpeg_added = True
+        try:
+            import static_ffmpeg
 
-        static_ffmpeg.add_paths(weak=True)
-    except Exception:
-        pass
+            static_ffmpeg.add_paths(weak=True)
+        except Exception:
+            pass
 
 
 def find_tool(tool: str) -> str | None:
