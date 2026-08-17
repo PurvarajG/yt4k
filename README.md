@@ -6,11 +6,8 @@ destination, paste a link, review what yt4k understood, and download.
 
 ## Install
 
-Requires **Python 3.10+**, [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and
-`ffmpeg`. The installer creates a dedicated venv at
-`~/.local/share/yt4k/venv` for yt4k's own Python dependency
-([Textual](https://textual.textualize.io/)), so it never fights your system,
-Homebrew, or conda Python.
+The only prerequisite is **Python 3.10+**. No Homebrew, no apt, no
+installing `yt-dlp` or `ffmpeg` yourself.
 
 ```bash
 git clone https://github.com/PurvarajG/yt4k.git
@@ -18,20 +15,29 @@ cd yt4k
 ./install.sh
 ```
 
-The installer:
-- installs `yt-dlp` and `ffmpeg` (via Homebrew on macOS, via pip + your
-  package manager on Linux) if they're missing
-- creates `~/.local/share/yt4k/venv` and installs Textual into it
-- adds a `yt4k` launcher to `~/.local/bin` that runs `yt4k.py` straight out
-  of this folder, using that venv's `python3` — so keep the folder where it
-  is, and `git pull` alone is enough to update
-- removes `~/yt4k.py` if an older install left that copy behind
+The installer creates a dedicated venv at `~/.local/share/yt4k/venv` and
+puts everything yt4k needs inside it — [Textual](https://textual.textualize.io/),
+[`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and static `ffmpeg`/`ffprobe`
+binaries — so it never fights your system, Homebrew, or conda Python, and
+none of it has to be on your `PATH`. If you already have `ffmpeg` installed,
+yt4k uses yours instead of the bundled copy.
+
+It also adds a `yt4k` launcher to `~/.local/bin` that runs `yt4k.py` straight
+out of this folder using that venv's `python3` — so keep the folder where it
+is — and removes `~/yt4k.py` if an older install left that copy behind.
 
 If `~/.local/bin` isn't already on your `PATH`, the installer tells you the
 line to add to your shell rc file.
 
-Re-run `./install.sh` only if you move the folder or the launcher goes
-missing; updates themselves need nothing but `git pull`.
+To update:
+
+```bash
+git pull && ./install.sh
+```
+
+`git pull` alone updates yt4k itself; re-running `./install.sh` also refreshes
+the bundled `yt-dlp`, which is what to do when a download suddenly stops
+working.
 
 ## Use
 

@@ -1,52 +1,19 @@
 #!/usr/bin/env bash
-# Installs yt4k: puts a `yt4k` launcher on your PATH at ~/.local/bin/yt4k that
-# runs the script straight out of this folder. Safe to re-run to update.
+# Installs yt4k. The only thing this needs from your machine is Python 3.10+.
 #
-# Earlier versions copied the script to ~/yt4k.py and ran that instead, which
-# left two copies to keep in step — and edits to the repo did nothing until
-# you re-ran this. The launcher now points here, so this folder is the one
-# and only copy: keep it where it is.
+# Everything else - Textual, yt-dlp, and ffmpeg/ffprobe - is installed into a
+# dedicated venv at ~/.local/share/yt4k/venv, so there's no Homebrew step, no
+# apt step, and nothing to put on your PATH by hand. A `yt4k` launcher goes
+# in ~/.local/bin and runs the script straight out of this folder, so keep
+# the folder where it is; `git pull && ./install.sh` is the update.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
+VENV_DIR="$HOME/.local/share/yt4k/venv"
 
 echo "Installing yt4k..."
 mkdir -p "$BIN_DIR"
-
-install_macos_deps() {
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "Homebrew not found. Install it from https://brew.sh, then re-run this script." >&2
-    exit 1
-  fi
-  for pkg in yt-dlp ffmpeg; do
-    if ! command -v "$pkg" >/dev/null 2>&1; then
-      echo "Installing $pkg via Homebrew..."
-      brew install "$pkg"
-    fi
-  done
-}
-
-install_linux_deps() {
-  if ! command -v yt-dlp >/dev/null 2>&1; then
-    echo "Installing yt-dlp via pip..."
-    python3 -m pip install --user -U yt-dlp
-  fi
-  if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "ffmpeg not found. Install it with your distro's package manager, e.g.:"
-    echo "  sudo apt install ffmpeg"
-    exit 1
-  fi
-}
-
-case "$(uname -s)" in
-  Darwin) install_macos_deps ;;
-  Linux)  install_linux_deps ;;
-  *)
-    echo "Unsupported OS: $(uname -s). yt4k needs a POSIX shell, yt-dlp, and ffmpeg." >&2
-    exit 1
-    ;;
-esac
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 not found on PATH. Install Python 3.10+ and re-run this script." >&2
@@ -59,14 +26,11 @@ if [ "$py_ok" != "1" ]; then
   exit 1
 fi
 
-# yt4k's own Python deps (Textual) live in a dedicated venv rather than the
-# system/Homebrew/conda python3 — many of those refuse "pip install" outright
-# (PEP 668's externally-managed-environment guard), and even where they don't,
-# installing into whatever python3 happens to be first on PATH is fragile:
-# it's a different interpreter in every shell and breaks silently when that
-# changes. The launcher below always runs yt4k.py with this venv's python3.
-VENV_DIR="$HOME/.local/share/yt4k/venv"
-
+# yt4k's dependencies live in their own venv rather than in whatever python3
+# happens to be first on PATH: many system/Homebrew/conda Pythons refuse
+# "pip install" outright (PEP 668's externally-managed-environment guard),
+# and installing into a moving target breaks silently when that target
+# changes. The launcher below always uses this venv's python3.
 if [ ! -x "$VENV_DIR/bin/python3" ]; then
   echo "Creating yt4k's Python environment at $VENV_DIR..."
   if ! python3 -m venv "$VENV_DIR"; then
@@ -75,12 +39,22 @@ if [ ! -x "$VENV_DIR/bin/python3" ]; then
   fi
 fi
 
-if ! "$VENV_DIR/bin/python3" -c 'import textual' >/dev/null 2>&1; then
-  echo "Installing Textual workbench dependency..."
-  if ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip ||
-     ! "$VENV_DIR/bin/python3" -m pip install --quiet -r "$REPO_DIR/requirements.txt"; then
-    echo "Could not install Textual into $VENV_DIR. Check pip/network access and re-run." >&2
-    exit 1
+echo "Installing yt4k's dependencies (Textual, yt-dlp, ffmpeg)..."
+if ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip ||
+   ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade -r "$REPO_DIR/requirements.txt"; then
+  echo "Could not install yt4k's dependencies into $VENV_DIR." >&2
+  echo "Check pip and network access, then re-run this script." >&2
+  exit 1
+fi
+
+# static-ffmpeg fetches its binaries on first use. Do that here, where a slow
+# download is expected, rather than in the middle of someone's first clip.
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+  echo "Fetching ffmpeg..."
+  if ! "$VENV_DIR/bin/python3" -c 'import static_ffmpeg; static_ffmpeg.add_paths()' >/dev/null 2>&1; then
+    echo "Warning: could not download the bundled ffmpeg. Clipping and format" >&2
+    echo "conversion will fail until this succeeds - re-run install.sh when" >&2
+    echo "you have network access, or install ffmpeg yourself." >&2
   fi
 fi
 

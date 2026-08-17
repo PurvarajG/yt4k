@@ -19,8 +19,8 @@ Plain English works too, on the command line or in the interactive request box:
     yt4k URL just the audio as mp3 320k
     yt4k URL 2:10-4:05 h265 small file -o ~/Desktop
 
-Requires: yt-dlp and ffmpeg on PATH.
-    brew install yt-dlp ffmpeg      # macOS
+Requires nothing but Python 3.10+: ./install.sh puts yt-dlp and ffmpeg in
+yt4k's own venv.
 
 Every interactive session opens by asking where to save, with your default
 highlighted — enter accepts it, [d] on another folder makes that the default.

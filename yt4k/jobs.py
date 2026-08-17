@@ -15,6 +15,7 @@ from typing import Callable, Sequence
 from .models import JobResult, JobStage, ProgressEvent, Yt4kError
 from .parsing import Clip, clip_section, clip_tag
 from .planning import JobPlan
+from .tools import find_tool
 
 Popen = subprocess.Popen
 
@@ -98,7 +99,7 @@ class JobRunner:
         self,
         popen: Callable[..., "subprocess.Popen"] = subprocess.Popen,
         run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
-        which: Callable[[str], str | None] = shutil.which,
+        which: Callable[[str], str | None] = find_tool,
         killpg: Callable[[int, int], None] | None = None,
         grace_period: float = GRACE_PERIOD_SECONDS,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -115,8 +116,8 @@ class JobRunner:
     def _require(self, tool: str) -> str:
         path = self._which(tool)
         if not path:
-            raise Yt4kError(f"'{tool}' not found on PATH. Install it with: "
-                             f"brew install {tool}")
+            raise Yt4kError(f"'{tool}' is missing. Re-run ./install.sh in the "
+                             f"yt4k folder to reinstall it.")
         return path
 
     # ------------------------------------------------------------ process
@@ -247,6 +248,10 @@ class JobRunner:
                 "%(progress.total_bytes_estimate)s %(progress.total_bytes)s "
                 "%(progress.speed)s %(progress.eta)s"),
                "-o", template]
+        # yt-dlp runs ffmpeg itself to merge streams and to cut sections, and
+        # it looks for ffmpeg on PATH - where yt4k's bundled copy isn't. Point
+        # it at whichever ffmpeg we resolved.
+        cmd += ["--ffmpeg-location", str(Path(self._require("ffmpeg")).parent)]
         if merge:
             cmd += ["--merge-output-format", merge]
         if section:
