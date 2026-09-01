@@ -36,3 +36,28 @@ def run_cli(tmp_path: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
         )
 
     return run
+
+
+@pytest.fixture(autouse=True)
+def _no_real_updates(monkeypatch):
+    """Keep the test suite off pip and off the network.
+
+    The app kicks off a daily yt-dlp update on mount; left alone, every test
+    that starts the workbench would shell out to pip. Only the app's own
+    reference is swapped, so tests of the updater itself still exercise the
+    real class.
+    """
+    from yt4k.cli import app as app_module
+    from yt4k.updater import UpdateResult
+
+    class OfflineUpdater:
+        def check_in_background(self, on_done=None):
+            return None
+
+        def manages_own_env(self):
+            return True
+
+        def update_now(self):
+            return UpdateResult(False, error="disabled in tests")
+
+    monkeypatch.setattr(app_module, "Updater", OfflineUpdater)

@@ -58,6 +58,16 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; 
   fi
 fi
 
+# YouTube signs its media URLs behind a JavaScript challenge. yt-dlp solves it
+# with an external JS runtime; with none installed, downloads fail with a 403
+# and "ffmpeg exited with code 8". Deno is the runtime yt-dlp prefers, and it
+# isn't something we can pip-install, so warn rather than fail.
+if ! command -v deno >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
+  echo "Warning: no JavaScript runtime (deno or node) found on PATH." >&2
+  echo "YouTube downloads will fail with a 403 until you install one:" >&2
+  echo "  https://docs.deno.com/runtime/getting_started/installation/" >&2
+fi
+
 cat > "$BIN_DIR/yt4k" <<WRAP
 #!/bin/sh
 exec "$VENV_DIR/bin/python3" "$REPO_DIR/yt4k.py" "\$@"

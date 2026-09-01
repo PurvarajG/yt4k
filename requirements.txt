@@ -8,7 +8,9 @@ textual>=8,<9
 # The downloader itself. Kept in yt4k's venv so `git pull && ./install.sh`
 # can refresh it - YouTube changes often enough that a stale yt-dlp is the
 # usual reason a download suddenly stops working.
-yt-dlp>=2024.1.1
+# Floor is the oldest build verified to accept --remote-components, the flag
+# yt4k passes so yt-dlp can solve YouTube's JS challenge (see jobs.py).
+yt-dlp>=2026.8.19
 
 # Static ffmpeg + ffprobe binaries, so clipping and transcoding work without
 # Homebrew or apt. A system ffmpeg on PATH is still preferred when present

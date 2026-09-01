@@ -112,6 +112,7 @@ class JobRunner:
         self._poll_interval = poll_interval
         self._active_workdirs: set[Path] = set()
         self._workdirs_lock = threading.Lock()
+        self._flag_support: dict[str, bool] = {}
 
     def _require(self, tool: str) -> str:
         path = self._which(tool)
@@ -119,6 +120,28 @@ class JobRunner:
             raise Yt4kError(f"'{tool}' is missing. Re-run ./install.sh in the "
                              f"yt4k folder to reinstall it.")
         return path
+
+    def _ytdlp(self) -> list[str]:
+        """The yt-dlp binary plus the flags every invocation needs.
+
+        YouTube signs its media URLs behind a JavaScript challenge; without a
+        solver, yt-dlp falls back to unsigned URLs, googlevideo answers 403,
+        and the ffmpeg doing the fetch exits with code 8. The solver script
+        ships separately from yt-dlp, and yt-dlp only fetches it when asked -
+        hence --remote-components. Older builds don't know the flag, so ask
+        --help once rather than hand them an argument they'd reject.
+        """
+        cmd = [self._require("yt-dlp")]
+        if self._supports_flag("--remote-components"):
+            cmd += ["--remote-components", "ejs:github"]
+        return cmd
+
+    def _supports_flag(self, flag: str) -> bool:
+        if flag not in self._flag_support:
+            out = self._run([self._require("yt-dlp"), "--help"],
+                            capture_output=True, text=True)
+            self._flag_support[flag] = flag in (out.stdout or "")
+        return self._flag_support[flag]
 
     # ------------------------------------------------------------ process
 
@@ -182,7 +205,7 @@ class JobRunner:
 
     def video_info(self, url: str) -> dict:
         out = self._run(
-            [self._require("yt-dlp"), "--no-playlist", "--no-warnings", "-J", url],
+            self._ytdlp() + ["--no-playlist", "--no-warnings", "-J", url],
             capture_output=True, text=True,
         )
         if out.returncode != 0:
@@ -241,13 +264,15 @@ class JobRunner:
                emit: Callable[[ProgressEvent], None], cancel: CancellationToken,
                section: str | None = None, precise: bool = True) -> Path:
         template = str(workdir / "%(title).150B [%(id)s].%(ext)s")
-        cmd = [self._require("yt-dlp"), "-f", fmt, "--no-playlist", "--no-warnings",
-               "--newline", "--quiet", "--progress",
-               "--progress-template",
-               ("download:YT4K %(progress.downloaded_bytes)s "
-                "%(progress.total_bytes_estimate)s %(progress.total_bytes)s "
-                "%(progress.speed)s %(progress.eta)s"),
-               "-o", template]
+        cmd = self._ytdlp() + [
+            "-f", fmt, "--no-playlist", "--no-warnings",
+            "--newline", "--quiet", "--progress",
+            "--progress-template",
+            ("download:YT4K %(progress.downloaded_bytes)s "
+             "%(progress.total_bytes_estimate)s %(progress.total_bytes)s "
+             "%(progress.speed)s %(progress.eta)s"),
+            "-o", template,
+        ]
         # yt-dlp runs ffmpeg itself to merge streams and to cut sections, and
         # it looks for ffmpeg on PATH - where yt4k's bundled copy isn't. Point
         # it at whichever ffmpeg we resolved.

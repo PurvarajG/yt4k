@@ -11,6 +11,7 @@ from ..models import SessionState, ValidationError, Yt4kError
 from ..parsing import normalize_metadata, parse_request
 from ..planning import JobPlan, build_job_plan
 from ..settings import SettingsStore, remember_destination
+from ..updater import Updater
 from .screens.destination import DestinationChosen
 from .screens.home import RequestSubmitted
 from .screens.review import ReviewConfirmed
@@ -30,6 +31,7 @@ class Yt4kApp(App):
         state: SessionState | None = None,
         store: SettingsStore | None = None,
         runner: JobRunner | None = None,
+        updater: Updater | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -41,12 +43,23 @@ class Yt4kApp(App):
             self.config_notice = notice
         self.state = state
         self.runner = runner or JobRunner()
+        self.updater = updater or Updater()
         self.completed_count = 0
+        self.update_notice: str | None = None
 
     def on_mount(self) -> None:
+        # Off the UI thread and at most daily: the workbench must open at the
+        # same speed on a machine with no network as on one with a fast pip.
+        self.updater.check_in_background(self._note_update)
+
         from .screens.destination import DestinationScreen
 
         self.push_screen(DestinationScreen())
+
+    def _note_update(self, result) -> None:
+        """Remember a successful background update so a later failure screen
+        can say the retry is worth taking. Called from the update thread."""
+        self.update_notice = result.describe()
 
     def on_resize(self, event: events.Resize) -> None:
         too_small = event.size.width < MIN_WIDTH or event.size.height < MIN_HEIGHT

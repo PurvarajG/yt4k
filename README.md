@@ -36,8 +36,21 @@ git pull && ./install.sh
 ```
 
 `git pull` alone updates yt4k itself; re-running `./install.sh` also refreshes
-the bundled `yt-dlp`, which is what to do when a download suddenly stops
-working.
+the bundled `yt-dlp`.
+
+You shouldn't often need that second part. YouTube changes how it serves video
+every few weeks, and an out-of-date `yt-dlp` is the usual reason downloads
+suddenly start failing, so yt4k keeps its own copy current: it checks once a
+day in the background, and if a download fails in a way that looks like YouTube
+outrunning `yt-dlp` (a 403, a failed signature challenge), it updates on the
+spot and retries. To force it:
+
+```bash
+yt4k --update
+```
+
+This only ever touches yt4k's own venv - a `yt-dlp` you installed through
+Homebrew, apt, or pipx is left alone.
 
 ## Use
 
@@ -47,6 +60,7 @@ yt4k URL                   # one-shot, uses your saved settings
 yt4k URL --res 1080 --codec h264
 yt4k URL --audio wav
 yt4k URL -v                # raw yt-dlp / ffmpeg firehose
+yt4k --update              # refresh yt-dlp now (also happens daily)
 ```
 
 ### Say what you want

@@ -404,3 +404,41 @@ def test_run_concurrent_single_url_falls_back_to_run(tmp_path, _download_writes_
 
     assert len(results) == 1
     assert results[0].status == "success"
+
+
+def _ytdlp_help(text):
+    return subprocess.CompletedProcess(["yt-dlp", "--help"], 0, stdout=text,
+                                        stderr="")
+
+
+def test_fetch_passes_challenge_solver_when_ytdlp_supports_it(tmp_path):
+    plan = make_plan(tmp_path)
+    fake = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"]),
+                       FakeProc([])],
+                      run_results=[_ytdlp_help("  --remote-components SPEC")])
+    runner = fake.build()
+    runner.probe = lambda path: {"duration": 10.0, "vcodec": "h264", "acodec": "aac"}
+    runner.run(plan, lambda e: None, CancellationToken())
+
+    cmd = fake.popen_calls[0]
+    assert cmd[cmd.index("--remote-components") + 1] == "ejs:github"
+
+
+def test_fetch_omits_challenge_solver_on_older_ytdlp(tmp_path):
+    plan = make_plan(tmp_path)
+    fake = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"]),
+                       FakeProc([])],
+                      run_results=[_ytdlp_help("  --newline")])
+    runner = fake.build()
+    runner.probe = lambda path: {"duration": 10.0, "vcodec": "h264", "acodec": "aac"}
+    runner.run(plan, lambda e: None, CancellationToken())
+
+    assert "--remote-components" not in fake.popen_calls[0]
+
+
+def test_ytdlp_flag_support_is_probed_once(tmp_path):
+    fake = FakeRunner([], run_results=[_ytdlp_help("  --remote-components SPEC")])
+    runner = fake.build()
+
+    assert runner._ytdlp() == runner._ytdlp()
+    assert "--remote-components" in runner._ytdlp()

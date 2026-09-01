@@ -11,6 +11,7 @@ from ...jobs import CancellationToken
 from ...models import JobResult, JobStage, ProgressEvent
 from ...planning import JobPlan
 from ..widgets.common import ContextFooter, MinimumSizeGuard, WorkbenchHeader
+from ...updater import looks_stale
 from ..widgets.progress import stage_label, status_line
 
 LOG_LIMIT = 200
@@ -138,11 +139,35 @@ class DownloadScreen(Screen):
             )
             actions.mount(Button("Retry", id="retry-button"))
             actions.mount(Button("Edit settings", id="edit-settings-button"))
+            if any(looks_stale(r.message) for r in failed):
+                self._update_ytdlp()
         else:
             done = sum(1 for r in results if r.status == "success")
             word = "file" if done == 1 else "files"
             self.query_one("#download-status", Static).update(f"Done - {done} {word}")
         actions.mount(Button("Home", id="home-button", variant="primary"))
+
+    @work(thread=True, exclusive=True)
+    def _update_ytdlp(self) -> None:
+        """A 403 or a failed challenge almost always means yt-dlp fell behind
+        YouTube. Fix it here, while the user is looking at the Retry button,
+        rather than leaving them to discover it."""
+        self.call_from_thread(
+            self.query_one("#download-status", Static).update,
+            "That looks like an outdated yt-dlp - updating...",
+        )
+        try:
+            result = self.app.updater.update_now()
+        except Exception as error:  # noqa: BLE001 - a failed update isn't fatal
+            result = None
+            message = f"Could not update yt-dlp: {error}"
+        else:
+            message = result.describe()
+        if result is not None and result.changed:
+            message = f"{message} - press Retry"
+        self.call_from_thread(
+            self.query_one("#download-status", Static).update, message,
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "home-button":

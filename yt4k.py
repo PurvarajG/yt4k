@@ -49,6 +49,7 @@ from yt4k.parsing import parse_clip as core_parse_clip
 from yt4k.parsing import normalize_metadata, parse_request as core_parse_request
 from yt4k.planning import build_job_plan
 from yt4k.settings import SettingsStore
+from yt4k.updater import Updater, looks_stale
 
 CONFIG_PATH = Path("~/.config/yt4k/config.json").expanduser()
 VERBOSE = False
@@ -273,14 +274,35 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path)
     """Execute one or more URLs through the shared job engine, printing a
     plain-text summary per file. This is the only one-shot progress printer."""
     runner = JobRunner()
-    try:
+    updater = Updater()
+    updater.check_in_background()
+
+    def build_plan():
         metadata = tuple(
             normalize_metadata(url, runner.video_info(url)) for url in urls
         )
-        plan = build_job_plan(tuple(urls), destination, settings, clip, (), metadata)
+        return build_job_plan(tuple(urls), destination, settings, clip, (),
+                              metadata)
+
+    try:
+        plan = build_plan()
     except (ValidationError, CoreYt4kError) as error:
-        die(str(error))
-        return
+        # Reading the metadata is the first thing that touches YouTube, so a
+        # stale yt-dlp usually announces itself here rather than mid-download.
+        if not looks_stale(str(error)):
+            die(str(error))
+            return
+        print(f"  {C.grey}updating yt-dlp...{C.reset}", file=sys.stderr)
+        result = updater.update_now()
+        if not result.changed:
+            die(str(error))
+            return
+        print(f"  {C.grey}{result.describe()}{C.reset}", file=sys.stderr)
+        try:
+            plan = build_plan()
+        except (ValidationError, CoreYt4kError) as retry_error:
+            die(str(retry_error))
+            return
 
     bars: dict = {}
     cancel = CancellationToken()
@@ -298,6 +320,26 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path)
 
     for _key, bar in list(bars.items()):
         bar.done("")
+
+    # A failure that smells like an outdated yt-dlp is worth one silent
+    # update-and-retry: the alternative is handing someone a 403 and letting
+    # them work out that a dependency, not their URL, is the problem.
+    stale = [r for r in results
+             if r.status == "failed" and looks_stale(r.message)]
+    if stale and updater.manages_own_env():
+        print(f"\n  {C.grey}that looks like an outdated yt-dlp - "
+              f"updating...{C.reset}", file=sys.stderr)
+        result = updater.update_now()
+        print(f"  {C.grey}{result.describe()}{C.reset}\n", file=sys.stderr)
+        if result.changed:
+            bars.clear()
+            try:
+                results = runner.run(plan, emit, cancel)
+            except KeyboardInterrupt:
+                cancel.cancel()
+                raise
+            for _key, bar in list(bars.items()):
+                bar.done("")
     for result in results:
         if result.status == "success":
             print(f"\n  {C.green}✓{C.reset} {C.bold}{result.output_path.name}{C.reset}")
@@ -362,6 +404,9 @@ def main() -> None:
                    help="hardware encoder (much faster, slightly bigger)")
     p.add_argument("--keep-source", action="store_true",
                    help="also keep the original downloaded file")
+    p.add_argument("--update", action="store_true",
+                   help="update yt-dlp now and exit (yt4k also does this "
+                        "daily on its own)")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="show raw yt-dlp / ffmpeg output instead of bars")
     # Back-compat with the old flag names.
@@ -370,6 +415,10 @@ def main() -> None:
     args = p.parse_args()
 
     VERBOSE = args.verbose
+
+    if args.update:
+        print(f"  {Updater().update_now().describe()}")
+        return
 
     # Plain English first, so explicit flags below always win over words.
     raw = " ".join(args.words)
