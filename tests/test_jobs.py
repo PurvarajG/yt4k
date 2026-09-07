@@ -501,3 +501,64 @@ def test_playlist_info_requests_flat_json_without_media_download():
     command = fake.run_calls[-1]
     assert {"--flat-playlist", "--skip-download", "--yes-playlist", "--ignore-errors"} <= set(command)
     assert command[-1] == "https://youtube.com/playlist?list=PL"
+
+
+def _fetch_named(name):
+    def fetch(self, url, workdir, *args, **kwargs):
+        path = workdir / name
+        path.write_bytes(b"0" * 32)
+        return path
+    return fetch
+
+
+def _titled(video_id="3TEnuDVFYUY", title="Mara Hrudiya May"):
+    return MediaMetadata(url="https://youtu.be/a", title=title, channel=None,
+                         duration=10.0, raw={"id": video_id})
+
+
+def test_output_is_named_for_the_video_title_alone(tmp_path, monkeypatch):
+    from yt4k import jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module.JobRunner, "_fetch",
+                        _fetch_named("Mara Hrudiya May [3TEnuDVFYUY].mkv"))
+    plan = build_job_plan((), tmp_path, Settings(codec="source", container="mkv"),
+                          None, (), (),
+                          items=(JobItem(url="https://youtu.be/a", metadata=_titled()),))
+    runner = FakeRunner([FakeProc([])]).build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    result = runner.run(plan, lambda e: None, CancellationToken())[0]
+
+    assert result.output_path.name == "Mara Hrudiya May.mkv"
+
+
+def test_playlist_output_keeps_only_its_number_and_the_title(tmp_path, monkeypatch):
+    from yt4k import jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module.JobRunner, "_fetch",
+                        _fetch_named("Mara Hrudiya May [3TEnuDVFYUY].mkv"))
+    item = JobItem(url="https://youtu.be/a", metadata=_titled(),
+                   playlist_title="A playlist", playlist_folder="A playlist",
+                   playlist_position=3, playlist_count=11)
+    plan = build_job_plan((), tmp_path, Settings(codec="source", container="mkv"),
+                          None, (), (), items=(item,))
+    runner = FakeRunner([FakeProc([])]).build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    result = runner.run(plan, lambda e: None, CancellationToken())[0]
+
+    assert result.output_path.name == "003 - Mara Hrudiya May.mkv"
+
+
+def test_title_stem_drops_clip_marker_and_unknown_ids(tmp_path):
+    from yt4k.jobs import _title_stem
+
+    clipped = tmp_path / "Mara Hrudiya May [3TEnuDVFYUY].clip.mkv"
+    assert _title_stem(clipped, _titled()) == "Mara Hrudiya May"
+    # No id in the metadata: fall back to the 11-character YouTube id shape.
+    assert _title_stem(clipped, meta()) == "Mara Hrudiya May"
+    # A bracketed part of the real title is not an id and stays put.
+    assert _title_stem(tmp_path / "Song [Official Video].mkv", meta()) \
+        == "Song [Official Video]"
+    # A title that sanitizes away entirely still yields a usable name.
+    assert _title_stem(tmp_path / " [3TEnuDVFYUY].mkv", _titled()) == "Mara Hrudiya May"

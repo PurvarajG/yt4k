@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .models import JobResult, JobStage, ProgressEvent, Yt4kError
-from .parsing import Clip, clip_section, clip_tag
+from .parsing import Clip, MediaMetadata, clip_section, clip_tag
 from .planning import JobPlan
 from .tools import find_tool
 
@@ -76,6 +76,27 @@ class CancellationToken:
 
 class Cancelled(Yt4kError):
     """Raised internally when a job is stopped mid-flight."""
+
+
+_YT_ID_SUFFIX = re.compile(r" \[[A-Za-z0-9_-]{11}\]$")
+
+
+def _title_stem(src: Path, metadata: MediaMetadata) -> str:
+    """Name the finished file after the YouTube video title, nothing else.
+
+    yt-dlp's working template appends " [id]" so temporary names stay unique,
+    and local trimming adds a ".clip" marker. Both are plumbing, and neither
+    belongs in the file the user keeps.
+    """
+    stem = src.stem
+    if stem.endswith(".clip"):
+        stem = stem[: -len(".clip")]
+    video_id = (metadata.raw or {}).get("id")
+    if isinstance(video_id, str) and stem.endswith(f" [{video_id}]"):
+        stem = stem[: -len(video_id) - 3]
+    else:
+        stem = _YT_ID_SUFFIX.sub("", stem)
+    return stem.strip() or (metadata.title or "video")
 
 
 def _unique(path: Path) -> Path:
@@ -536,7 +557,8 @@ class JobRunner:
             ext = "mp4" if (vcodec in MP4_SAFE_VIDEO
                             and acodec in MP4_SAFE_AUDIO) else "mkv"
 
-        stem = (plan.items[item_index].output_prefix + src.stem
+        item = plan.items[item_index]
+        stem = (item.output_prefix + _title_stem(src, item.metadata)
                 + (f" ({clip_tag(*cut, cut[1] is None)})" if cut else ""))
         final = _unique(out_dir / f"{stem}.{ext}")
 
@@ -569,7 +591,8 @@ class JobRunner:
 
         row = next(r for r in AUDIO_FORMATS if r[0] == s.audio_format)
         _value, ext, codec, lossy = row
-        stem = (plan.items[item_index].output_prefix + src.stem
+        item = plan.items[item_index]
+        stem = (item.output_prefix + _title_stem(src, item.metadata)
                 + (f" ({clip_tag(*cut, cut[1] is None)})" if cut else ""))
 
         if codec is None:

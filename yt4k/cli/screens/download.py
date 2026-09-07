@@ -119,7 +119,9 @@ class DownloadScreen(Screen):
                 continue
             if result.status == "success":
                 bar.update(progress=100)
-                status.update(f"Done - {result.message}")
+                # The row's title already names the file; repeating the
+                # saved name here only made every row wrap.
+                status.update("Done")
             elif result.status == "cancelled":
                 status.update("Cancelled")
             else:

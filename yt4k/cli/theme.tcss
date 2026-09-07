@@ -60,16 +60,33 @@ Screen.size-blocked #screen-body {
 
 .item-title {
     text-style: bold;
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 .item-status {
     color: $text-muted;
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#download-status {
+    padding: 1 0 0 0;
+    text-style: bold;
 }
 
 #download-log {
     height: auto;
     max-height: 8;
     border: round $panel;
+}
+
+/* One log line per row - wrapped lines pushed the whole box around. */
+#download-log-content {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 /* Narrow terminals: metadata moves beneath its value; footer hints reduce. */
