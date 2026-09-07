@@ -28,6 +28,24 @@ def test_explain_parses_clip_and_quality(run_cli):
     assert "1080p" in result.stdout
 
 
+def test_ambiguous_video_playlist_url_requires_explicit_cli_scope(run_cli):
+    url = "https://www.youtube.com/watch?v=chosen&list=PL123"
+
+    result = run_cli(url, "--explain")
+
+    assert result.returncode == 2
+    assert "--video or --playlist" in result.stderr
+
+
+def test_explicit_cli_video_scope_allows_ambiguous_explain(run_cli):
+    url = "https://www.youtube.com/watch?v=chosen&list=PL123"
+
+    result = run_cli(url, "--video", "--explain")
+
+    assert result.returncode == 0
+    assert "video" in result.stdout
+
+
 def test_output_override_is_session_only(run_cli, tmp_path):
     result = run_cli("https://youtu.be/example", "--explain", "-o", str(tmp_path / "clips"))
 

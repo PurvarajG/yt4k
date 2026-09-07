@@ -4,6 +4,7 @@ import signal
 import subprocess
 import threading
 import time
+import json
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ import pytest
 from yt4k.jobs import CancellationToken, JobRunner
 from yt4k.models import JobStage, Settings
 from yt4k.parsing import Clip, MediaMetadata
-from yt4k.planning import build_job_plan
+from yt4k.planning import JobItem, build_job_plan
 
 
 def meta(url="https://youtu.be/a", duration=10.0, title="video"):
@@ -58,6 +59,7 @@ class FakeRunner:
         self._run_results = list(run_results or [])
         self.killpg_calls = []
         self.popen_calls = []
+        self.run_calls = []
         self.which_ok = which_ok
 
     def which(self, tool):
@@ -68,6 +70,7 @@ class FakeRunner:
         return self._procs.pop(0)
 
     def run(self, cmd, **kwargs):
+        self.run_calls.append(cmd)
         if self._run_results:
             return self._run_results.pop(0)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -234,6 +237,47 @@ def test_batch_continues_after_one_failure(tmp_path):
 
     assert results[0].status == "failed"
     assert results[1].status == "success"
+
+
+def test_playlist_item_uses_numbered_safe_subfolder(tmp_path):
+    item = JobItem(
+        url="https://youtu.be/a", metadata=meta(duration=10.0),
+        playlist_title="A playlist", playlist_folder="A playlist",
+        playlist_position=1, playlist_count=12,
+    )
+    plan = build_job_plan((), tmp_path, Settings(codec="source", container="mkv"),
+                          None, (), (), items=(item,))
+    runner = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"])]).build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    result = runner.run(plan, lambda e: None, CancellationToken())[0]
+
+    assert result.status == "success"
+    assert result.output_path.parent == tmp_path / "A playlist"
+    assert result.output_path.name.startswith("001 - ")
+
+
+def test_playlist_preflight_failure_does_not_start_subprocess_or_abort_batch(tmp_path):
+    unavailable = JobItem(
+        url="https://youtube.com/playlist?list=PL", metadata=meta(duration=None),
+        playlist_title="A playlist", playlist_folder="A playlist",
+        playlist_position=1, playlist_count=2, preflight_error="Private video",
+    )
+    available = JobItem(
+        url="https://youtu.be/b", metadata=meta(url="https://youtu.be/b", duration=10.0),
+        playlist_title="A playlist", playlist_folder="A playlist",
+        playlist_position=2, playlist_count=2,
+    )
+    plan = build_job_plan((), tmp_path, Settings(codec="source", container="mkv"),
+                          None, (), (), items=(unavailable, available))
+    fake = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"])] )
+    runner = fake.build()
+    runner.probe = lambda path: {"duration": 10.0}
+
+    results = runner.run(plan, lambda e: None, CancellationToken())
+
+    assert [result.status for result in results] == ["failed", "success"]
+    assert len(fake.popen_calls) == 1
 
 
 def test_cancellation_sends_sigterm_then_waits(tmp_path):
@@ -442,3 +486,18 @@ def test_ytdlp_flag_support_is_probed_once(tmp_path):
 
     assert runner._ytdlp() == runner._ytdlp()
     assert "--remote-components" in runner._ytdlp()
+
+
+def test_playlist_info_requests_flat_json_without_media_download():
+    info = {"title": "Playlist", "entries": []}
+    fake = FakeRunner([], run_results=[
+        _ytdlp_help("  --remote-components SPEC"),
+        subprocess.CompletedProcess(["yt-dlp"], 0, stdout=json.dumps(info), stderr=""),
+    ])
+
+    result = fake.build().playlist_info("https://youtube.com/playlist?list=PL")
+
+    assert result == info
+    command = fake.run_calls[-1]
+    assert {"--flat-playlist", "--skip-download", "--yes-playlist", "--ignore-errors"} <= set(command)
+    assert command[-1] == "https://youtube.com/playlist?list=PL"

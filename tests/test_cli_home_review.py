@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from textual.widgets import Input
 
@@ -7,6 +9,7 @@ from yt4k.cli.app import Yt4kApp
 from yt4k.cli.screens.destination import DestinationScreen
 from yt4k.cli.screens.home import HomeScreen
 from yt4k.cli.screens.review import ReviewScreen
+from yt4k.cli.screens.playlist_choice import PlaylistChoiceScreen
 from yt4k.jobs import JobRunner
 from yt4k.models import JobResult, Settings, SessionState
 from yt4k.settings import SettingsStore
@@ -26,7 +29,10 @@ class FakeRunner(JobRunner):
 
 def make_app(tmp_path, settings=None, destination=None, runner=None):
     store = SettingsStore(tmp_path / "config.json")
-    state = SessionState(settings=settings or Settings(),
+    # The first screen selects the saved default, not state.destination.
+    # Keep that selection inside the test's temporary directory too.
+    settings = replace(settings or Settings(), output_dir=str(tmp_path / "downloads"))
+    state = SessionState(settings=settings,
                          destination=destination or (tmp_path / "downloads"))
     app = Yt4kApp(state=state, store=store, runner=runner or FakeRunner())
     return app
@@ -104,6 +110,57 @@ async def test_valid_request_opens_review_screen(tmp_path):
         assert isinstance(app.screen, ReviewScreen)
         assert app.screen.plan.settings.res == 1080
         assert app.screen.plan.metadata[0].title == "A great video"
+
+
+@pytest.mark.asyncio
+async def test_pure_playlist_opens_review_with_title_and_entry_count(tmp_path):
+    class PlaylistRunner(FakeRunner):
+        def playlist_info(self, url):
+            return {"id": "PL123", "title": "A playlist", "entries": [
+                {"id": "first", "title": "First", "duration": 10},
+                None,
+            ]}
+
+    app = make_app(tmp_path, runner=PlaylistRunner())
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        field = app.screen.query_one("#request-input", Input)
+        field.value = "https://www.youtube.com/playlist?list=PL123"
+        await pilot.press("enter")
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, ReviewScreen):
+                break
+        assert isinstance(app.screen, ReviewScreen)
+        title = str(app.screen.query_one("#review-title").content)
+        assert "A playlist" in title
+        assert "2 items" in title
+        assert "1 unavailable" in title
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_link_prompts_then_uses_selected_playlist_scope(tmp_path):
+    class PlaylistRunner(FakeRunner):
+        def playlist_info(self, url):
+            return {"id": "PL123", "title": "A playlist", "entries": [
+                {"id": "first", "title": "First", "duration": 10},
+            ]}
+
+    app = make_app(tmp_path, runner=PlaylistRunner())
+    async with app.run_test() as pilot:
+        await _goto_home(pilot)
+        field = app.screen.query_one("#request-input", Input)
+        field.value = "https://www.youtube.com/watch?v=chosen&list=PL123"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PlaylistChoiceScreen)
+        await pilot.press("down", "enter")
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, ReviewScreen):
+                break
+        assert isinstance(app.screen, ReviewScreen)
+        assert app.screen.plan.items[0].playlist_title == "A playlist"
 
 
 @pytest.mark.asyncio

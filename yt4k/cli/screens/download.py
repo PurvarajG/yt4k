@@ -43,14 +43,12 @@ class DownloadScreen(Screen):
         self.results: list[JobResult] | None = None
 
     def compose(self) -> ComposeResult:
-        count = len(self.plan.urls)
+        count = len(self.plan.items)
         yield WorkbenchHeader(screen_label="DOWNLOAD", id="header")
         with Container(id="screen-body"):
             with VerticalScroll(id="download-items"):
-                for index, url in enumerate(self.plan.urls):
-                    metadata = (self.plan.metadata[index]
-                               if index < len(self.plan.metadata) else None)
-                    title = metadata.title if metadata else url
+                for index, item in enumerate(self.plan.items):
+                    title = item.output_prefix + item.metadata.title
                     with Container(id=f"item-{index}", classes="download-item"):
                         yield Static(title, classes="item-title")
                         yield ProgressBar(total=100, show_eta=False,
@@ -184,7 +182,9 @@ class DownloadScreen(Screen):
         self.app.switch_screen(HomeScreen())
 
     def _retry(self) -> None:
-        self.app.switch_screen(DownloadScreen(self.plan))
+        if self.results is None:
+            return
+        self.app.switch_screen(DownloadScreen(self.plan.retryable(self.results)))
 
     def _edit_settings(self) -> None:
         from .settings import SettingsScreen

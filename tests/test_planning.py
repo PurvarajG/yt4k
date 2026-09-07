@@ -6,7 +6,7 @@ import pytest
 
 from yt4k.models import Settings, ValidationError
 from yt4k.parsing import Clip, MediaMetadata
-from yt4k.planning import build_job_plan
+from yt4k.planning import JobItem, build_job_plan
 
 
 def meta(url="https://youtu.be/a", duration=100.0):
@@ -72,3 +72,9 @@ def test_build_job_plan_accepts_valid_clip(tmp_path: Path):
         metadata=(meta(duration=100.0),),
     )
     assert plan.clip.start == 10.0
+
+
+def test_retryable_rejects_results_that_do_not_match_plan(tmp_path: Path):
+    plan = build_job_plan(("https://youtu.be/a",), tmp_path, Settings(), None, (), (meta(),))
+    with pytest.raises(ValueError, match="results"):
+        plan.retryable([])

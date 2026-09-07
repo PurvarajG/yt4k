@@ -8,12 +8,14 @@ from textual.app import App
 
 from ..jobs import JobRunner
 from ..models import SessionState, ValidationError, Yt4kError
-from ..parsing import normalize_metadata, parse_request
+from ..parsing import parse_request
+from ..playlists import URLKind, classify_url, resolve_source_items
 from ..planning import JobPlan, build_job_plan
 from ..settings import SettingsStore, remember_destination
 from ..updater import Updater
 from .screens.destination import DestinationChosen
 from .screens.home import RequestSubmitted
+from .screens.playlist_choice import PlaylistScopesChosen
 from .screens.review import ReviewConfirmed
 from .screens.settings import SettingsSaved
 
@@ -83,19 +85,26 @@ class Yt4kApp(App):
                 self.screen.refresh_context()
 
     def on_request_submitted(self, message: RequestSubmitted) -> None:
-        self._fetch_metadata_and_review(message.raw)
+        parsed = parse_request(message.raw, self.state.settings)
+        if any(classify_url(url) is URLKind.AMBIGUOUS for url in parsed.urls):
+            from .screens.playlist_choice import PlaylistChoiceScreen
+
+            self.push_screen(PlaylistChoiceScreen(message.raw, parsed.urls))
+            return
+        self._fetch_metadata_and_review(message.raw, tuple(classify_url(url) for url in parsed.urls))
+
+    def on_playlist_scopes_chosen(self, message: PlaylistScopesChosen) -> None:
+        self.pop_screen()
+        self._fetch_metadata_and_review(message.raw, message.scopes)
 
     @work(thread=True, exclusive=True)
-    def _fetch_metadata_and_review(self, raw: str) -> None:
+    def _fetch_metadata_and_review(self, raw: str, scopes: tuple[URLKind, ...]) -> None:
         parsed = parse_request(raw, self.state.settings)
         try:
-            metadata = tuple(
-                normalize_metadata(url, self.runner.video_info(url))
-                for url in parsed.urls
-            )
+            items = resolve_source_items(parsed.urls, self.runner, scopes, parsed.clip)
             plan = build_job_plan(
-                parsed.urls, self.state.destination, parsed.settings,
-                parsed.clip, parsed.modifiers, metadata,
+                (), self.state.destination, parsed.settings,
+                parsed.clip, parsed.modifiers, (), items=items,
             )
         except (ValidationError, Yt4kError) as error:
             self.call_from_thread(self._show_home_error, str(error))

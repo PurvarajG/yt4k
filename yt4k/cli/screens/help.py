@@ -25,6 +25,13 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "start to 4:05  ·  until 0:45 - the beginning up to that point",
         "first 30s  ·  last 90s - relative to the start or the end",
     )),
+    ("PLAYLISTS", (
+        "paste a playlist URL - each entry keeps your current format and clip settings",
+        "video URL plus list= - choose video or whole playlist when asked",
+        "one-shot mixed links need --video or --playlist",
+        "files use a safe playlist folder and 001 - source-order names",
+        "unavailable entries fail individually; retry runs only failed/cancelled entries",
+    )),
     ("FORMAT WORDS", (
         "quality - 4k · 1440p · 1080p · 720p · 480p · best quality",
         "codec - av1 · vp9 · h264 · h265 / hevc · keep source",

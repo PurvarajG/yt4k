@@ -47,6 +47,7 @@ from yt4k.models import JobStage, Settings, ValidationError
 from yt4k.models import Yt4kError as CoreYt4kError
 from yt4k.parsing import parse_clip as core_parse_clip
 from yt4k.parsing import normalize_metadata, parse_request as core_parse_request
+from yt4k.playlists import URLKind, classify_url, resolve_source_items
 from yt4k.planning import build_job_plan
 from yt4k.settings import SettingsStore
 from yt4k.updater import Updater, looks_stale
@@ -270,7 +271,8 @@ def _present_progress(bars: dict, event) -> None:
     bar.update(frac, right)
 
 
-def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path) -> None:
+def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path,
+                 scopes: tuple[URLKind, ...]) -> None:
     """Execute one or more URLs through the shared job engine, printing a
     plain-text summary per file. This is the only one-shot progress printer."""
     runner = JobRunner()
@@ -278,11 +280,8 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path)
     updater.check_in_background()
 
     def build_plan():
-        metadata = tuple(
-            normalize_metadata(url, runner.video_info(url)) for url in urls
-        )
-        return build_job_plan(tuple(urls), destination, settings, clip, (),
-                              metadata)
+        items = resolve_source_items(tuple(urls), runner, scopes, clip)
+        return build_job_plan((), destination, settings, clip, (), (), items=items)
 
     try:
         plan = build_plan()
@@ -385,6 +384,11 @@ def main() -> None:
     p.add_argument("--clip", metavar="RANGE",
                    help="export only this slice, e.g. --clip 1:20-3:45, "
                         "--clip 'from 12:00', --clip 'last 90s'")
+    scope = p.add_mutually_exclusive_group()
+    scope.add_argument("--playlist", action="store_true",
+                       help="download the whole playlist for video+playlist links")
+    scope.add_argument("--video", action="store_true",
+                       help="download only the video for video+playlist links")
     p.add_argument("--explain", action="store_true",
                    help="show how the request was understood, download nothing")
     p.add_argument("-o", "--output-dir",
@@ -460,9 +464,24 @@ def main() -> None:
     s["recent_dirs"] = tuple(s.get("recent_dirs") or ())
     settings = Settings(**s)
 
+    scopes: list[URLKind] = []
+    for url in urls:
+        kind = classify_url(url)
+        if kind is URLKind.AMBIGUOUS:
+            if args.playlist:
+                kind = URLKind.PLAYLIST
+            elif args.video:
+                kind = URLKind.VIDEO
+            else:
+                p.error("this URL contains both a video and a playlist; pass --video or --playlist")
+        scopes.append(kind)
+
     if args.explain:
         print(f"  {C.bold}understood as{C.reset}")
         print(f"    links     {', '.join(urls) or '(none)'}")
+        if urls:
+            labels = ", ".join(scope.value for scope in scopes)
+            print(f"    scope     {labels}")
         print(f"    clip      {clip.label() if clip else '(whole video)'}")
         print(f"    settings  {summary(s)}")
         print(f"    folder    {tilde(active_dir(s))}"
@@ -479,7 +498,7 @@ def main() -> None:
         run_interactive()
         return
 
-    run_one_shot(urls, settings, clip, active_dir(s))
+    run_one_shot(urls, settings, clip, active_dir(s), tuple(scopes))
 
 
 if __name__ == "__main__":

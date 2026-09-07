@@ -66,10 +66,17 @@ class ReviewScreen(Screen):
     def compose(self) -> ComposeResult:
         yield WorkbenchHeader(screen_label="REVIEW", id="header")
         with Container(id="screen-body"):
-            count = len(self.plan.urls)
-            what = "1 link" if count == 1 else f"{count} links"
-            title = self.plan.metadata[0].title if self.plan.metadata else ""
-            yield Static(f"{what}   {title}", id="review-title")
+            count = len(self.plan.items)
+            if self.plan.playlist_count:
+                names = " · ".join(self.plan.playlist_titles)
+                unavailable = (f" · {self.plan.unavailable_count} unavailable"
+                               if self.plan.unavailable_count else "")
+                title = f"Playlist · {names} · {count} items{unavailable}"
+            else:
+                what = "1 link" if count == 1 else f"{count} links"
+                title = self.plan.items[0].metadata.title if self.plan.items else ""
+                title = f"{what}   {title}"
+            yield Static(title, id="review-title")
             yield Static(str(self.plan.destination), id="review-destination")
             if self.plan.modifiers:
                 yield Static(

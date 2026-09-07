@@ -59,6 +59,8 @@ yt4k                       # interactive Textual workbench
 yt4k URL                   # one-shot, uses your saved settings
 yt4k URL --res 1080 --codec h264
 yt4k URL --audio wav
+yt4k PLAYLIST_URL              # downloads each playlist entry in order
+yt4k WATCH_URL?list=PLAYLIST --playlist
 yt4k URL -v                # raw yt-dlp / ffmpeg firehose
 yt4k --update              # refresh yt-dlp now (also happens daily)
 ```
@@ -97,6 +99,25 @@ words, and audio words override any resolution you also mentioned.
 
 Whatever it read back is shown on the review screen before anything
 downloads, so a misread is one keypress from being fixed.
+
+### Playlists
+
+Paste a YouTube playlist URL in the workbench or pass it to `yt4k`; every
+available entry becomes its own job and uses the same quality, audio, clip,
+and conversion settings. The review screen shows the playlist title, entry
+count, and any entries yt-dlp already knows are unavailable. One failed,
+private, or deleted item does not stop the others.
+
+A link that includes both a video and `list=` needs an explicit scope. The
+workbench asks for each such link. In a one-shot command, pass `--video` for
+that video alone or `--playlist` for the whole list; yt4k refuses to guess.
+
+Playlist files land in a safe folder under your selected destination, named
+after the playlist plus its stable list ID. Names begin with their original
+playlist position (`001 - …`), even when jobs finish out of order. Retrying
+from the workbench runs only failed or cancelled entries. `last 90s` and other
+end-relative clips may read an entry's full metadata when flat playlist data
+does not include its duration; if that lookup fails, only that entry fails.
 
 ### Inside the workbench
 

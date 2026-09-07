@@ -214,6 +214,27 @@ class JobRunner:
         import json
         return json.loads(out.stdout)
 
+    def playlist_info(self, url: str) -> dict:
+        """Read a playlist's lightweight entry list without downloading media."""
+        out = self._run(
+            self._ytdlp() + ["--flat-playlist", "--yes-playlist", "--ignore-errors",
+                              "--skip-download", "--no-warnings", "-J", url],
+            capture_output=True, text=True,
+        )
+        if out.returncode != 0:
+            detail = (out.stderr or "").strip().splitlines()
+            suffix = f": {detail[-1]}" if detail else ""
+            raise Yt4kError("could not read playlist info (bad URL, private playlist, "
+                             f"or yt-dlp needs updating){suffix}")
+        import json
+        try:
+            data = json.loads(out.stdout)
+        except (TypeError, ValueError) as error:
+            raise Yt4kError("yt-dlp returned invalid playlist metadata") from error
+        if not isinstance(data, dict):
+            raise Yt4kError("yt-dlp returned invalid playlist metadata")
+        return data
+
     def probe(self, path: Path) -> dict:
         import json
         out = self._run(
@@ -515,14 +536,16 @@ class JobRunner:
             ext = "mp4" if (vcodec in MP4_SAFE_VIDEO
                             and acodec in MP4_SAFE_AUDIO) else "mkv"
 
-        stem = src.stem + (f" ({clip_tag(*cut, cut[1] is None)})" if cut else "")
+        stem = (plan.items[item_index].output_prefix + src.stem
+                + (f" ({clip_tag(*cut, cut[1] is None)})" if cut else ""))
         final = _unique(out_dir / f"{stem}.{ext}")
 
         if target and vcodec != target:
             self._transcode_video(src, final, target, plan, duration,
                                    item_index, item_count, emit, cancel)
             if s.keep_source:
-                shutil.move(str(src), _unique(out_dir / src.name))
+                prefix = plan.items[item_index].output_prefix
+                shutil.move(str(src), _unique(out_dir / f"{prefix}{src.name}"))
         elif ext == "mkv" and src.suffix == ".mkv":
             shutil.move(str(src), final)
         else:
@@ -546,7 +569,8 @@ class JobRunner:
 
         row = next(r for r in AUDIO_FORMATS if r[0] == s.audio_format)
         _value, ext, codec, lossy = row
-        stem = src.stem + (f" ({clip_tag(*cut, cut[1] is None)})" if cut else "")
+        stem = (plan.items[item_index].output_prefix + src.stem
+                + (f" ({clip_tag(*cut, cut[1] is None)})" if cut else ""))
 
         if codec is None:
             final = _unique(out_dir / f"{stem}{src.suffix}")
@@ -559,16 +583,23 @@ class JobRunner:
 
         final = _unique(out_dir / f"{stem}.{ext}")
         self._convert_audio(src, final, codec, s.audio_bitrate, lossy, duration,
-                             item_index, item_count, emit, cancel)
+                            item_index, item_count, emit, cancel)
         if s.keep_source:
-            shutil.move(str(src), _unique(out_dir / src.name))
+            prefix = plan.items[item_index].output_prefix
+            shutil.move(str(src), _unique(out_dir / f"{prefix}{src.name}"))
         return final
 
     def _run_item(self, item_index: int, url: str, plan: JobPlan,
                   emit: Callable[[ProgressEvent], None],
                   cancel: CancellationToken) -> JobResult:
-        item_count = len(plan.urls)
-        metadata = plan.metadata[item_index]
+        item_count = len(plan.items)
+        item = plan.items[item_index]
+        url = item.url
+        metadata = item.metadata
+        if item.preflight_error:
+            return JobResult(url=url, status="failed", output_path=None,
+                             message=item.preflight_error,
+                             technical_detail=item.preflight_error)
         emit(ProgressEvent(item_index=item_index, item_count=item_count,
                             stage=JobStage.METADATA, fraction=None,
                             message=metadata.title))
@@ -583,15 +614,23 @@ class JobRunner:
             cut = (start, end)
             dur = (end - start) if end is not None else dur
 
+        out_dir = plan.destination
+        if item.playlist_folder:
+            out_dir = plan.destination / item.playlist_folder
+            try:
+                out_dir.resolve().relative_to(plan.destination.resolve())
+            except ValueError as error:
+                raise Yt4kError("playlist output folder is unsafe") from error
+        out_dir.mkdir(parents=True, exist_ok=True)
         plan.destination.mkdir(parents=True, exist_ok=True)
         workdir = Path(tempfile.mkdtemp(dir=plan.destination, prefix=".yt4k-"))
         with self._workdirs_lock:
             self._active_workdirs.add(workdir)
         try:
-            final = (self._audio_job(url, workdir, plan.destination, plan, dur,
+            final = (self._audio_job(url, workdir, out_dir, plan, dur,
                                       cut, item_index, item_count, emit, cancel)
                      if plan.settings.mode == "audio" else
-                     self._video_job(url, workdir, plan.destination, plan, dur,
+                     self._video_job(url, workdir, out_dir, plan, dur,
                                       cut, item_index, item_count, emit, cancel))
             emit(ProgressEvent(item_index=item_index, item_count=item_count,
                                 stage=JobStage.FINALIZING, fraction=1.0,
@@ -626,6 +665,10 @@ class JobRunner:
         except Yt4kError as error:
             return JobResult(url=url, status="failed", output_path=None,
                              message=str(error), technical_detail=str(error))
+        except OSError as error:
+            return JobResult(url=url, status="failed", output_path=None,
+                             message=f"could not write output: {error}",
+                             technical_detail=str(error))
 
     def run(self, plan: JobPlan, emit: Callable[[ProgressEvent], None],
             cancel: CancellationToken) -> list[JobResult]:
@@ -645,10 +688,10 @@ class JobRunner:
         Results are returned in the same order as `plan.urls` regardless of
         completion order.
         """
-        if len(plan.urls) <= 1:
+        if len(plan.items) <= 1:
             return self.run(plan, emit, cancel)
-        results: list[JobResult | None] = [None] * len(plan.urls)
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(plan.urls))) as pool:
+        results: list[JobResult | None] = [None] * len(plan.items)
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(plan.items))) as pool:
             futures = {
                 pool.submit(self.run_item, i, url, plan, emit, cancel): i
                 for i, url in enumerate(plan.urls)
