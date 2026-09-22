@@ -16,3 +16,7 @@ yt-dlp>=2026.8.19
 # Homebrew or apt. A system ffmpeg on PATH is still preferred when present
 # (see yt4k/tools.py).
 static-ffmpeg>=2.5
+
+# JS runtime yt-dlp needs to solve YouTube's signature challenge (see
+# jobs.py). The PyPI wheel ships the official deno binary, so no Homebrew.
+deno>=2.4

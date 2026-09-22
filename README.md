@@ -6,28 +6,40 @@ destination, paste a link, review what yt4k understood, and download.
 
 ## Install
 
-The only prerequisite is **Python 3.10+**. No Homebrew, no apt, no
-installing `yt-dlp` or `ffmpeg` yourself.
+One command on a fresh Mac or Linux machine. You don't need Python,
+Homebrew, ffmpeg, or anything else installed first; only `git`:
 
 ```bash
-git clone https://github.com/PurvarajG/yt4k.git
-cd yt4k
-./install.sh
+git clone https://github.com/PurvarajG/yt4k.git && cd yt4k && ./install.sh
 ```
 
-The installer creates a dedicated venv at `~/.local/share/yt4k/venv` and
-puts everything yt4k needs inside it — [Textual](https://textual.textualize.io/),
-[`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and static `ffmpeg`/`ffprobe`
-binaries — so it never fights your system, Homebrew, or conda Python, and
-none of it has to be on your `PATH`. If you already have `ffmpeg` installed,
-yt4k uses yours instead of the bundled copy.
+Then open a new terminal and run `yt4k`.
 
-It also adds a `yt4k` launcher to `~/.local/bin` that runs `yt4k.py` straight
-out of this folder using that venv's `python3` — so keep the folder where it
-is — and removes `~/yt4k.py` if an older install left that copy behind.
+> On a brand-new Mac, the first `git` command may pop up "install command line
+> developer tools". Click **Install**, wait for it to finish, and run the line
+> again.
 
-If `~/.local/bin` isn't already on your `PATH`, the installer tells you the
-line to add to your shell rc file.
+What `install.sh` does for you:
+
+- **Python**: uses your Python if it's 3.10 or newer. If not, it downloads a
+  private Python 3.12 with [uv](https://docs.astral.sh/uv/) into
+  `~/.local`. No admin password, no Homebrew, and your system Python stays
+  untouched.
+- **Everything yt4k needs**: [Textual](https://textual.textualize.io/),
+  [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), static `ffmpeg`/`ffprobe`,
+  and [Deno](https://deno.com/) (the JavaScript runtime yt-dlp uses to get
+  past YouTube's signature check; without it downloads fail with a 403).
+  All of it goes into a dedicated venv at `~/.local/share/yt4k/venv`, so it
+  never fights your system, Homebrew, or conda Python. If you already have
+  `ffmpeg` installed, yt4k uses yours instead of the bundled copy.
+- **The `yt4k` command**: a launcher in `~/.local/bin` that runs `yt4k.py`
+  straight out of this folder (so keep the folder where it is). If
+  `~/.local/bin` isn't on your `PATH`, it adds it to your shell rc file
+  (`~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or `~/.profile`) once.
+- It also removes `~/yt4k.py` if an older install left that copy behind.
+
+Running `./install.sh` again is always safe; it repairs or refreshes whatever
+is missing.
 
 To update:
 
@@ -171,6 +183,6 @@ you ask for it, so a one-off destination can't quietly become permanent.
 
 ## Moving to another machine
 
-Clone this repo on the new machine and run `./install.sh` — that's it. Your
+Run the one-line install above on the new machine. That's it. Your
 settings and downloads are per-machine (not synced by this repo); the
 installer only needs this folder to set things up fresh.

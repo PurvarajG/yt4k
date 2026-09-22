@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Installs yt4k. The only thing this needs from your machine is Python 3.10+.
+# Installs yt4k on a fresh macOS or Linux machine. Needs nothing preinstalled:
+# if there's no Python 3.10+, it fetches one with uv (no sudo, no Homebrew).
 #
-# Everything else - Textual, yt-dlp, and ffmpeg/ffprobe - is installed into a
-# dedicated venv at ~/.local/share/yt4k/venv, so there's no Homebrew step, no
-# apt step, and nothing to put on your PATH by hand. A `yt4k` launcher goes
+# Everything else - Textual, yt-dlp, ffmpeg/ffprobe, and the Deno JS runtime -
+# is installed into a dedicated venv at ~/.local/share/yt4k/venv, so there's
+# no Homebrew step, no apt step, and ~/.local/bin is added to your PATH for
+# you. A `yt4k` launcher goes
 # in ~/.local/bin and runs the script straight out of this folder, so keep
 # the folder where it is; `git pull && ./install.sh` is the update.
 set -euo pipefail
@@ -15,16 +17,41 @@ VENV_DIR="$HOME/.local/share/yt4k/venv"
 echo "Installing yt4k..."
 mkdir -p "$BIN_DIR"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 not found on PATH. Install Python 3.10+ and re-run this script." >&2
-  exit 1
-fi
+# Pick a Python 3.10+ to build the venv from. Use the system one when it's
+# new enough; otherwise have uv download a private CPython. uv's installer
+# drops a single binary in ~/.local/bin and needs no admin rights.
+py_is_ok() {
+  "$1" -c 'import sys, venv; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
 
-py_ok=$(python3 -c 'import sys; print(1 if sys.version_info >= (3, 10) else 0)')
-if [ "$py_ok" != "1" ]; then
-  echo "yt4k needs Python 3.10+, found $(python3 --version)." >&2
-  exit 1
+PYTHON=""
+for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
+  if command -v "$candidate" >/dev/null 2>&1 && py_is_ok "$candidate"; then
+    PYTHON="$(command -v "$candidate")"
+    break
+  fi
+done
+
+if [ -z "$PYTHON" ]; then
+  echo "No Python 3.10+ found - fetching one with uv (nothing system-wide changes)..."
+  UV="$(command -v uv || true)"
+  [ -z "$UV" ] && [ -x "$BIN_DIR/uv" ] && UV="$BIN_DIR/uv"
+  if [ -z "$UV" ]; then
+    if command -v curl >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$BIN_DIR" UV_NO_MODIFY_PATH=1 sh
+    else
+      wget -qO- https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$BIN_DIR" UV_NO_MODIFY_PATH=1 sh
+    fi
+    UV="$BIN_DIR/uv"
+  fi
+  "$UV" python install 3.12
+  PYTHON="$("$UV" python find 3.12)"
+  if ! py_is_ok "$PYTHON"; then
+    echo "Could not set up Python automatically. Install Python 3.10+ and re-run." >&2
+    exit 1
+  fi
 fi
+echo "Using $("$PYTHON" --version) at $PYTHON"
 
 # yt4k's dependencies live in their own venv rather than in whatever python3
 # happens to be first on PATH: many system/Homebrew/conda Pythons refuse
@@ -32,14 +59,15 @@ fi
 # and installing into a moving target breaks silently when that target
 # changes. The launcher below always uses this venv's python3.
 if [ ! -x "$VENV_DIR/bin/python3" ]; then
+  rm -rf "$VENV_DIR"
   echo "Creating yt4k's Python environment at $VENV_DIR..."
-  if ! python3 -m venv "$VENV_DIR"; then
+  if ! "$PYTHON" -m venv "$VENV_DIR"; then
     echo "Could not create a venv at $VENV_DIR. Check your python3 install and re-run." >&2
     exit 1
   fi
 fi
 
-echo "Installing yt4k's dependencies (Textual, yt-dlp, ffmpeg)..."
+echo "Installing yt4k's dependencies (Textual, yt-dlp, ffmpeg, Deno)..."
 if ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip ||
    ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade -r "$REPO_DIR/requirements.txt"; then
   echo "Could not install yt4k's dependencies into $VENV_DIR." >&2
@@ -58,19 +86,18 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; 
   fi
 fi
 
-# YouTube signs its media URLs behind a JavaScript challenge. yt-dlp solves it
-# with an external JS runtime; with none installed, downloads fail with a 403
-# and "ffmpeg exited with code 8". Deno is the runtime yt-dlp prefers, and it
-# isn't something we can pip-install, so warn rather than fail.
-if ! command -v deno >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
-  echo "Warning: no JavaScript runtime (deno or node) found on PATH." >&2
-  echo "YouTube downloads will fail with a 403 until you install one:" >&2
-  echo "  https://docs.deno.com/runtime/getting_started/installation/" >&2
+# YouTube signs its media URLs behind a JavaScript challenge that yt-dlp solves
+# with an external JS runtime; without one, downloads fail with a 403. Deno is
+# pip-installed into the venv (requirements.txt) and the launcher puts the
+# venv's bin first on PATH, so yt-dlp always finds it.
+if [ ! -x "$VENV_DIR/bin/deno" ]; then
+  echo "Warning: Deno didn't install into the venv. YouTube downloads may fail" >&2
+  echo "with a 403 unless deno or node is on your PATH." >&2
 fi
 
 cat > "$BIN_DIR/yt4k" <<WRAP
 #!/bin/sh
-exec "$VENV_DIR/bin/python3" "$REPO_DIR/yt4k.py" "\$@"
+PATH="$VENV_DIR/bin:\$PATH" exec "$VENV_DIR/bin/python3" "$REPO_DIR/yt4k.py" "\$@"
 WRAP
 chmod +x "$BIN_DIR/yt4k"
 
@@ -101,13 +128,21 @@ fi
 echo "Installed. Downloads land in ~/Downloads/YouTube 4K by default."
 echo "yt4k runs $REPO_DIR/yt4k.py using the venv at $VENV_DIR — keep this folder where it is."
 
+# Put ~/.local/bin on PATH in the user's shell rc, once, so `yt4k` just works
+# in new terminals.
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
-    echo
-    echo "$BIN_DIR isn't on your PATH yet. Add this to your shell rc file"
-    echo "(~/.zshrc or ~/.bashrc) and open a new terminal:"
-    echo "  export PATH=\"$BIN_DIR:\$PATH\""
+    case "$(basename "${SHELL:-}")" in
+      zsh) RC="$HOME/.zshrc" ;;
+      bash) if [ "$(uname)" = Darwin ]; then RC="$HOME/.bash_profile"; else RC="$HOME/.bashrc"; fi ;;
+      *) RC="$HOME/.profile" ;;
+    esac
+    if ! grep -qs '# added by yt4k' "$RC"; then
+      printf '\nexport PATH="$HOME/.local/bin:$PATH"  # added by yt4k\n' >> "$RC"
+      echo "Added ~/.local/bin to your PATH in $RC."
+    fi
+    echo "Open a new terminal (or run: source $RC) before using yt4k."
     ;;
 esac
 
