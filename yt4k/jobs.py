@@ -15,6 +15,7 @@ from typing import Callable, Sequence
 from .models import JobResult, JobStage, ProgressEvent, Yt4kError
 from .parsing import Clip, MediaMetadata, clip_section, clip_tag
 from .planning import JobPlan
+from . import pinterest
 from .tools import find_tool
 
 Popen = subprocess.Popen
@@ -225,6 +226,11 @@ class JobRunner:
     # ------------------------------------------------------------ metadata
 
     def video_info(self, url: str) -> dict:
+        if pinterest.is_pinterest(url):
+            pin = pinterest.pin_info(url)
+            if not pin["is_video"]:
+                return pin
+            url = pin["webpage_url"]
         out = self._run(
             self._ytdlp() + ["--no-playlist", "--no-warnings", "-J", url],
             capture_output=True, text=True,
@@ -646,6 +652,12 @@ class JobRunner:
                 raise Yt4kError("playlist output folder is unsafe") from error
         out_dir.mkdir(parents=True, exist_ok=True)
         plan.destination.mkdir(parents=True, exist_ok=True)
+        images = (metadata.raw or {}).get(pinterest.IMAGES_KEY)
+        if images:
+            return self._image_job(item, images, out_dir, item_index,
+                                   item_count, emit)
+        if pinterest.is_pinterest(url):
+            url = pinterest.canonical_url(url)
         workdir = Path(tempfile.mkdtemp(dir=plan.destination, prefix=".yt4k-"))
         with self._workdirs_lock:
             self._active_workdirs.add(workdir)
@@ -667,6 +679,23 @@ class JobRunner:
                 self._active_workdirs.discard(workdir)
             if created_here:
                 shutil.rmtree(workdir, ignore_errors=True)
+
+    def _image_job(self, item, images: list[str], out_dir: Path,
+                   item_index: int, item_count: int,
+                   emit: Callable[[ProgressEvent], None]) -> JobResult:
+        """Image pins skip yt-dlp and ffmpeg: fetch the originals as-is."""
+        from .playlists import safe_playlist_name
+        emit(ProgressEvent(item_index=item_index, item_count=item_count,
+                            stage=JobStage.DOWNLOADING, fraction=None,
+                            message=item.metadata.title))
+        stem = item.output_prefix + safe_playlist_name(item.metadata.title)
+        saved = pinterest.download_images(images, out_dir / stem, _unique)
+        emit(ProgressEvent(item_index=item_index, item_count=item_count,
+                            stage=JobStage.FINALIZING, fraction=1.0,
+                            message=saved[0].name))
+        note = f" (+{len(saved) - 1} more)" if len(saved) > 1 else ""
+        return JobResult(url=item.url, status="success", output_path=saved[0],
+                          message=f"Saved {saved[0].name}{note}")
 
     def run_item(self, item_index: int, url: str, plan: JobPlan,
                 emit: Callable[[ProgressEvent], None],
