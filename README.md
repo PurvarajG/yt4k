@@ -1,6 +1,6 @@
 # yt4k
 
-An interactive YouTube downloader that lives in your terminal. Run it bare
+An interactive YouTube (and Pinterest) downloader that lives in your terminal. Run it bare
 and it opens a focused, keyboard-first Textual workbench: choose a
 destination, paste a link, review what yt4k understood, and download.
 
@@ -73,6 +73,7 @@ yt4k URL --res 1080 --codec h264
 yt4k URL --audio wav
 yt4k PLAYLIST_URL              # downloads each playlist entry in order
 yt4k WATCH_URL?list=PLAYLIST --playlist
+yt4k PINTEREST_PIN_URL      # a pin's video, or its original image(s)
 yt4k URL -v                # raw yt-dlp / ffmpeg firehose
 yt4k --update              # refresh yt-dlp now (also happens daily)
 ```
@@ -130,6 +131,23 @@ playlist position (`001 - …`), even when jobs finish out of order. Retrying
 from the workbench runs only failed or cancelled entries. `last 90s` and other
 end-relative clips may read an entry's full metadata when flat playlist data
 does not include its duration; if that lookup fails, only that entry fails.
+
+### Pinterest
+
+Paste any pin link: `pinterest.com/pin/…`, a regional domain like
+`in.pinterest.com`, or a `pin.it/…` short link. yt4k reads the pin first and
+picks the right path:
+
+- **Video pins** go through yt-dlp like any other video, so resolution,
+  codec, audio-only, and clip ranges all apply.
+- **Image pins** are saved as the original full-resolution file, straight
+  from Pinterest, with no re-encoding. A carousel pin saves every image,
+  numbered `Title (1).jpg`, `Title (2).jpg`, and so on. Format words and clip
+  ranges don't apply to images.
+
+Image pins rely on Pinterest's internal pin data, which isn't a public API.
+If Pinterest changes it, the pin fails with a clear error and everything
+else keeps working.
 
 ### Inside the workbench
 
