@@ -5,14 +5,14 @@ from dataclasses import replace
 import pytest
 from textual.widgets import Input
 
-from yt4k.cli.app import Yt4kApp
-from yt4k.cli.screens.destination import DestinationScreen
-from yt4k.cli.screens.home import HomeScreen
-from yt4k.cli.screens.review import ReviewScreen
-from yt4k.cli.screens.playlist_choice import PlaylistChoiceScreen
-from yt4k.jobs import JobRunner
-from yt4k.models import JobResult, Settings, SessionState
-from yt4k.settings import SettingsStore
+from fetch4k.cli.app import Fetch4kApp
+from fetch4k.cli.screens.destination import DestinationScreen
+from fetch4k.cli.screens.home import HomeScreen
+from fetch4k.cli.screens.review import ReviewScreen
+from fetch4k.cli.screens.playlist_choice import PlaylistChoiceScreen
+from fetch4k.jobs import JobRunner
+from fetch4k.models import JobResult, Settings, SessionState
+from fetch4k.settings import SettingsStore
 
 
 class FakeRunner(JobRunner):
@@ -34,7 +34,7 @@ def make_app(tmp_path, settings=None, destination=None, runner=None):
     settings = replace(settings or Settings(), output_dir=str(tmp_path / "downloads"))
     state = SessionState(settings=settings,
                          destination=destination or (tmp_path / "downloads"))
-    app = Yt4kApp(state=state, store=store, runner=runner or FakeRunner())
+    app = Fetch4kApp(state=state, store=store, runner=runner or FakeRunner())
     return app
 
 
@@ -223,7 +223,7 @@ async def test_review_escape_preserves_request_and_returns_home(tmp_path):
 
 @pytest.mark.asyncio
 async def test_review_confirm_emits_one_immutable_plan(tmp_path):
-    from yt4k.cli.screens.download import DownloadScreen
+    from fetch4k.cli.screens.download import DownloadScreen
 
     app = make_app(tmp_path)
     async with app.run_test() as pilot:
@@ -237,7 +237,7 @@ async def test_review_confirm_emits_one_immutable_plan(tmp_path):
 @pytest.mark.asyncio
 async def test_settings_screen_hides_irrelevant_fields(tmp_path):
     from textual.widgets import Select
-    from yt4k.cli.screens.settings import SettingsScreen
+    from fetch4k.cli.screens.settings import SettingsScreen
 
     app = make_app(tmp_path, settings=Settings(mode="audio", audio_format="wav"))
     async with app.run_test() as pilot:
@@ -251,7 +251,7 @@ async def test_settings_screen_hides_irrelevant_fields(tmp_path):
 
 @pytest.mark.asyncio
 async def test_settings_save_persists_once(tmp_path):
-    from yt4k.cli.screens.settings import SettingsScreen
+    from fetch4k.cli.screens.settings import SettingsScreen
     from textual.widgets import Select, Button
 
     app = make_app(tmp_path, settings=Settings(mode="video", res=2160))
@@ -272,7 +272,7 @@ async def test_settings_save_persists_once(tmp_path):
 
 @pytest.mark.asyncio
 async def test_settings_cancel_discards_draft(tmp_path):
-    from yt4k.cli.screens.settings import SettingsScreen
+    from fetch4k.cli.screens.settings import SettingsScreen
     from textual.widgets import Select
 
     app = make_app(tmp_path, settings=Settings(mode="video", res=2160))
@@ -290,7 +290,7 @@ async def test_settings_cancel_discards_draft(tmp_path):
 
 @pytest.mark.asyncio
 async def test_help_screen_escape_returns_without_state_loss(tmp_path):
-    from yt4k.cli.screens.help import HelpScreen
+    from fetch4k.cli.screens.help import HelpScreen
 
     app = make_app(tmp_path)
     async with app.run_test() as pilot:
@@ -307,7 +307,7 @@ async def test_help_screen_escape_returns_without_state_loss(tmp_path):
 
 @pytest.mark.asyncio
 async def test_help_screen_search_filters_sections(tmp_path):
-    from yt4k.cli.screens.help import HelpScreen
+    from fetch4k.cli.screens.help import HelpScreen
     from textual.widgets import Input as HelpInput, Static as HelpStatic
 
     app = make_app(tmp_path)

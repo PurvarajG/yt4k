@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from yt4k.models import Settings, ValidationError
-from yt4k.parsing import Clip, MediaMetadata
-from yt4k.planning import JobItem, build_job_plan
+from fetch4k.models import Settings, ValidationError
+from fetch4k.parsing import Clip, MediaMetadata
+from fetch4k.planning import JobItem, build_job_plan
 
 
 def meta(url="https://youtu.be/a", duration=100.0):

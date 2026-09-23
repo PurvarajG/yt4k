@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from yt4k.cli.fields import (
+from fetch4k.cli.fields import (
     codec_choices, resolution_choices, source_codecs, source_heights,
 )
-from yt4k.cli.screens.review import ReviewScreen
-from yt4k.models import Settings
-from yt4k.parsing import MediaMetadata
-from yt4k.pinterest import IMAGES_KEY
-from yt4k.planning import JobItem, JobPlan
+from fetch4k.cli.screens.review import ReviewScreen
+from fetch4k.models import Settings
+from fetch4k.parsing import MediaMetadata
+from fetch4k.pinterest import IMAGES_KEY
+from fetch4k.planning import JobItem, JobPlan
 
 
 def _meta(raw):

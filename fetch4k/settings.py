@@ -24,7 +24,7 @@ _ALLOWED = {
 
 class SettingsStore:
     def __init__(self, path: Path | None = None):
-        self.path = path or Path("~/.config/yt4k/config.json").expanduser()
+        self.path = path or Path("~/.config/fetch4k/config.json").expanduser()
 
     def load(self) -> tuple[Settings, ConfigNotice | None]:
         if not self.path.exists():
@@ -91,7 +91,7 @@ def validate_destination(raw: str, create: bool = True) -> Path:
             path.mkdir(parents=True, exist_ok=True)
         if not path.is_dir():
             raise OSError("directory does not exist")
-        with tempfile.NamedTemporaryFile(dir=path, prefix=".yt4k-write-check-", delete=True):
+        with tempfile.NamedTemporaryFile(dir=path, prefix=".fetch4k-write-check-", delete=True):
             pass
     except OSError as error:
         raise ValidationError("destination", f"Destination is not writable: {path} ({error})") from error

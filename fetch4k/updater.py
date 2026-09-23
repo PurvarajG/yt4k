@@ -2,7 +2,7 @@
 
 YouTube changes how it serves video every few weeks - a new signature
 scheme, a new challenge, a new throttling trick. yt-dlp ships a fix within
-days, but yt4k pins nothing to that release cadence on its own, so an
+days, but fetch4k pins nothing to that release cadence on its own, so an
 install that worked in July starts answering "ffmpeg exited with code 8" in
 September and the user has no reason to suspect a dependency.
 
@@ -15,7 +15,7 @@ Two triggers, both aimed at never making someone diagnose that themselves:
   yt-dlp, update immediately regardless of the daily clock, so the retry the
   user is about to attempt is the one that works.
 
-Updates only ever touch yt4k's own venv. If yt4k is running against a
+Updates only ever touch fetch4k's own venv. If fetch4k is running against a
 system or Homebrew Python, `pip install --upgrade` there would be both rude
 and, under PEP 668, refused - so we detect that and decline.
 """
@@ -96,7 +96,7 @@ class Updater:
         interval: float = CHECK_INTERVAL_SECONDS,
     ) -> None:
         self.state_path = state_path or Path(
-            "~/.config/yt4k/update-state.json").expanduser()
+            "~/.config/fetch4k/update-state.json").expanduser()
         self._run = run
         self._now = now
         self._python = python or sys.executable
@@ -105,7 +105,7 @@ class Updater:
     # ------------------------------------------------------------ ownership
 
     def manages_own_env(self) -> bool:
-        """True when yt-dlp lives beside our interpreter, i.e. in yt4k's venv.
+        """True when yt-dlp lives beside our interpreter, i.e. in fetch4k's venv.
 
         Anything else - a Homebrew yt-dlp, a distro package, a pipx shim - is
         somebody else's to upgrade, and pip would either refuse or trample it.
@@ -161,9 +161,9 @@ class Updater:
         return (out.stdout or "").strip() or None
 
     def update_now(self) -> UpdateResult:
-        """Upgrade yt-dlp in yt4k's venv, whatever the clock says."""
+        """Upgrade yt-dlp in fetch4k's venv, whatever the clock says."""
         if not self.manages_own_env():
-            return UpdateResult(False, error="yt-dlp isn't managed by yt4k")
+            return UpdateResult(False, error="yt-dlp isn't managed by fetch4k")
         before = self._version()
         try:
             out = self._run(
@@ -210,7 +210,7 @@ class Updater:
             if on_done and result.changed:
                 on_done(result)
 
-        thread = threading.Thread(target=work, name="yt4k-update", daemon=True)
+        thread = threading.Thread(target=work, name="fetch4k-update", daemon=True)
         thread.start()
         return thread
 

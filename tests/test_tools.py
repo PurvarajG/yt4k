@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import sys
 
-from yt4k import tools
+from fetch4k import tools
 
 
-def test_yt_dlp_prefers_the_copy_in_yt4ks_own_venv(tmp_path, monkeypatch):
+def test_yt_dlp_prefers_the_copy_in_fetch4ks_own_venv(tmp_path, monkeypatch):
     """A stale system yt-dlp is the usual cause of a download breaking, so
     the copy install.sh keeps updated must win over whatever is on PATH."""
     venv_bin = tmp_path / "bin"
@@ -60,7 +60,7 @@ def test_missing_tool_returns_none(monkeypatch):
 
 
 def test_static_ffmpeg_import_failure_is_not_fatal(monkeypatch):
-    """No network at install time shouldn't crash yt4k - it should surface as
+    """No network at install time shouldn't crash fetch4k - it should surface as
     a plain 'tool is missing' error from JobRunner instead."""
     monkeypatch.setattr(tools, "_static_ffmpeg_added", False)
     real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) \

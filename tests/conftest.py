@@ -28,7 +28,7 @@ def run_cli(tmp_path: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
             "NO_COLOR": "1",
         })
         return subprocess.run(
-            [sys.executable, str(ROOT / "yt4k.py"), *args],
+            [sys.executable, str(ROOT / "fetch4k.py"), *args],
             capture_output=True,
             text=True,
             env=env,
@@ -47,8 +47,8 @@ def _no_real_updates(monkeypatch):
     reference is swapped, so tests of the updater itself still exercise the
     real class.
     """
-    from yt4k.cli import app as app_module
-    from yt4k.updater import UpdateResult
+    from fetch4k.cli import app as app_module
+    from fetch4k.updater import UpdateResult
 
     class OfflineUpdater:
         def check_in_background(self, on_done=None):

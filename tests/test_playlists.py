@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from yt4k.models import Settings, Yt4kError
-from yt4k.parsing import Clip
-from yt4k.playlists import URLKind, classify_url, expand_playlist, resolve_source_items, safe_playlist_name
-from yt4k.planning import build_job_plan
+from fetch4k.models import Settings, Fetch4kError
+from fetch4k.parsing import Clip
+from fetch4k.playlists import URLKind, classify_url, expand_playlist, resolve_source_items, safe_playlist_name
+from fetch4k.planning import build_job_plan
 
 
 def test_classify_pure_playlist_and_mixed_watch_urls():
@@ -92,7 +92,7 @@ def test_resolve_source_items_rejects_unselected_ambiguous_url():
 
     try:
         resolve_source_items(("https://youtube.com/watch?v=chosen&list=PL",), Runner(), (), None)
-    except Yt4kError as error:
+    except Fetch4kError as error:
         assert "--video or --playlist" in str(error)
     else:
         raise AssertionError("ambiguous URLs need an explicit scope")

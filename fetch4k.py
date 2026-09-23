@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 """
-yt4k — an interactive video downloader that lives in your terminal:
+fetch4k — an interactive video downloader that lives in your terminal:
 YouTube, Pinterest, Instagram, TikTok, X, Vimeo and over a thousand more sites.
 
 Run it bare and it opens a focused, keyboard-first Textual workbench: choose
-a destination, paste a link, review what yt4k understood, and download.
+a destination, paste a link, review what fetch4k understood, and download.
 
-    yt4k                     # interactive workbench
-    yt4k URL                 # one-shot, uses your saved settings
-    yt4k URL --res 1080 --codec h264
-    yt4k URL --audio wav
-    yt4k URL -v              # raw yt-dlp / ffmpeg firehose
+    fetch4k                     # interactive workbench
+    fetch4k URL                 # one-shot, uses your saved settings
+    fetch4k URL --res 1080 --codec h264
+    fetch4k URL --audio wav
+    fetch4k URL -v              # raw yt-dlp / ffmpeg firehose
 
 Plain English works too, on the command line or in the interactive request box:
 
-    yt4k URL 1:20 to 3:45            # export only that slice
-    yt4k URL 12:00 to the end        # and 'start to 4:05' for the opening
-    yt4k URL first 30s in 1080p mp4
-    yt4k URL just the audio as mp3 320k
-    yt4k URL 2:10-4:05 h265 small file -o ~/Desktop
+    fetch4k URL 1:20 to 3:45            # export only that slice
+    fetch4k URL 12:00 to the end        # and 'start to 4:05' for the opening
+    fetch4k URL first 30s in 1080p mp4
+    fetch4k URL just the audio as mp3 320k
+    fetch4k URL 2:10-4:05 h265 small file -o ~/Desktop
 
 Requires nothing but Python 3.10+: ./install.sh puts yt-dlp and ffmpeg in
-yt4k's own venv.
+fetch4k's own venv.
 
 Every interactive session opens by asking where to save, with your default
 highlighted — enter accepts it, [d] on another folder makes that the default.
 Press [f] later, or pass -o DIR, to redirect a session without touching the
-default. Downloads land in ~/Downloads/yt4k until you change that;
-settings persist in ~/.config/yt4k/config.json.
+default. Downloads land in ~/Downloads/fetch4k until you change that;
+settings persist in ~/.config/fetch4k/config.json.
 
 The interactive workbench owns the terminal for its whole lifetime (Textual's
 alternate screen) and restores it exactly once on exit.
@@ -40,20 +40,20 @@ from dataclasses import asdict
 from pathlib import Path
 
 # During the compatibility migration this script remains the public entrypoint
-# while also exposing the adjacent shared package as ``yt4k.*``.
-__path__ = [str(Path(__file__).with_name("yt4k"))]
+# while also exposing the adjacent shared package as ``fetch4k.*``.
+__path__ = [str(Path(__file__).with_name("fetch4k"))]
 
-from yt4k.jobs import CancellationToken, JobRunner
-from yt4k.models import JobStage, Settings, ValidationError
-from yt4k.models import Yt4kError as CoreYt4kError
-from yt4k.parsing import parse_clip as core_parse_clip
-from yt4k.parsing import normalize_metadata, parse_request as core_parse_request
-from yt4k.playlists import URLKind, classify_url, resolve_source_items
-from yt4k.planning import build_job_plan
-from yt4k.settings import SettingsStore
-from yt4k.updater import Updater, looks_stale
+from fetch4k.jobs import CancellationToken, JobRunner
+from fetch4k.models import JobStage, Settings, ValidationError
+from fetch4k.models import Fetch4kError as CoreFetch4kError
+from fetch4k.parsing import parse_clip as core_parse_clip
+from fetch4k.parsing import normalize_metadata, parse_request as core_parse_request
+from fetch4k.playlists import URLKind, classify_url, resolve_source_items
+from fetch4k.planning import build_job_plan
+from fetch4k.settings import SettingsStore
+from fetch4k.updater import Updater, looks_stale
 
-CONFIG_PATH = Path("~/.config/yt4k/config.json").expanduser()
+CONFIG_PATH = Path("~/.config/fetch4k/config.json").expanduser()
 VERBOSE = False
 
 
@@ -84,7 +84,7 @@ if not supports_color():
             setattr(C, _name, "")
 
 
-class Yt4kError(Exception):
+class Fetch4kError(Exception):
     """Anything that aborts one download without killing the session."""
 
 
@@ -92,7 +92,7 @@ class Yt4kError(Exception):
 
 def die(msg: str) -> None:
     sys.stdout.write("\r\033[K")
-    raise Yt4kError(msg)
+    raise Fetch4kError(msg)
 
 
 def human_bytes(n: float | None) -> str:
@@ -286,7 +286,7 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path,
 
     try:
         plan = build_plan()
-    except (ValidationError, CoreYt4kError) as error:
+    except (ValidationError, CoreFetch4kError) as error:
         # Reading the metadata is the first thing that touches YouTube, so a
         # stale yt-dlp usually announces itself here rather than mid-download.
         if not looks_stale(str(error)):
@@ -300,7 +300,7 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path,
         print(f"  {C.grey}{result.describe()}{C.reset}", file=sys.stderr)
         try:
             plan = build_plan()
-        except (ValidationError, CoreYt4kError) as retry_error:
+        except (ValidationError, CoreFetch4kError) as retry_error:
             die(str(retry_error))
             return
 
@@ -358,9 +358,9 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path,
 def run_interactive() -> None:
     """Launch the Textual workbench. Only imported when actually needed, so
     one-shot invocations (including --explain) never import Textual."""
-    from yt4k.cli.app import Yt4kApp
+    from fetch4k.cli.app import Fetch4kApp
 
-    app = Yt4kApp()
+    app = Fetch4kApp()
     app.run()
 
 
@@ -379,7 +379,7 @@ def main() -> None:
                     "yt-dlp supports. Run bare for the "
                     "Textual workbench, or pass a URL for a one-shot download. "
                     "Plain English after the URL works: "
-                    "yt4k URL 1:20 to 3:45 in 1080p mp4")
+                    "fetch4k URL 1:20 to 3:45 in 1080p mp4")
     p.add_argument("words", nargs="*", metavar="URL [words…]",
                    help="video URL (any site yt-dlp supports), optionally "
                         "followed by a time "
@@ -412,7 +412,7 @@ def main() -> None:
     p.add_argument("--keep-source", action="store_true",
                    help="also keep the original downloaded file")
     p.add_argument("--update", action="store_true",
-                   help="update yt-dlp now and exit (yt4k also does this "
+                   help="update yt-dlp now and exit (fetch4k also does this "
                         "daily on its own)")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="show raw yt-dlp / ffmpeg output instead of bars")
@@ -507,7 +507,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Yt4kError as e:
+    except Fetch4kError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:

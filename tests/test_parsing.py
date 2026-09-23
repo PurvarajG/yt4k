@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from yt4k.models import Settings
-from yt4k.parsing import Clip, parse_clip, parse_intent, parse_request, parse_timestamp
+from fetch4k.models import Settings
+from fetch4k.parsing import Clip, parse_clip, parse_intent, parse_request, parse_timestamp
 
 
 @pytest.mark.parametrize(

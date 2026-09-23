@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from yt4k.jobs import CancellationToken, JobRunner
-from yt4k.models import JobStage, Settings
-from yt4k.parsing import Clip, MediaMetadata
-from yt4k.planning import JobItem, build_job_plan
+from fetch4k.jobs import CancellationToken, JobRunner
+from fetch4k.models import JobStage, Settings
+from fetch4k.parsing import Clip, MediaMetadata
+from fetch4k.planning import JobItem, build_job_plan
 
 
 def meta(url="https://youtu.be/a", duration=10.0, title="video"):
@@ -95,7 +95,7 @@ def make_plan(tmp_path, settings=None, clip=None, urls=("https://youtu.be/a",),
 def _download_produces_file(monkeypatch):
     """yt-dlp's fake process doesn't touch disk, so make the fetch step drop a
     placeholder file into the workdir the way real yt-dlp would."""
-    from yt4k import jobs as jobs_module
+    from fetch4k import jobs as jobs_module
 
     original_fetch = jobs_module.JobRunner._fetch
 
@@ -112,7 +112,7 @@ def _download_produces_file(monkeypatch):
 def test_yt_dlp_progress_events_reported(tmp_path):
     plan = make_plan(tmp_path, settings=Settings(codec="source", container="mkv"))
     procs = [
-        FakeProc(["YT4K 512000 1000000 1000000 100000 5"], returncode=0),
+        FakeProc(["FETCH4K 512000 1000000 1000000 100000 5"], returncode=0),
     ]
     runner = FakeRunner(procs).build()
     events = []
@@ -132,7 +132,7 @@ def test_ffmpeg_out_time_progress_parsed(tmp_path):
     plan = make_plan(tmp_path, settings=Settings(codec="hevc", container="mp4",
                                                   hardware=False))
     procs = [
-        FakeProc(["YT4K 1000 1000 1000 NA NA"]),  # download
+        FakeProc(["FETCH4K 1000 1000 1000 NA NA"]),  # download
         FakeProc(["out_time_us=5000000", "progress=continue"]),  # transcode
     ]
     runner = FakeRunner(procs).build()
@@ -151,7 +151,7 @@ def test_ffmpeg_out_time_progress_parsed(tmp_path):
 def test_section_download_polls_progress_when_no_native_events(tmp_path):
     """yt-dlp hands --download-sections off to its ffmpeg external
     downloader, which only reports progress once, at completion - never
-    during. yt4k must fall back to polling the growing output file, or the
+    during. fetch4k must fall back to polling the growing output file, or the
     bar sits frozen on the previous stage for the whole clipped download."""
     plan = make_plan(tmp_path, settings=Settings(codec="source", container="mkv"),
                       clip=Clip(start=1.0, end=5.0))
@@ -160,7 +160,7 @@ def test_section_download_polls_progress_when_no_native_events(tmp_path):
     def on_wait():
         assert polled.wait(timeout=2), "poller never emitted progress"
 
-    procs = [FakeProc(["YT4K 32 32 32 NA NA"], on_wait=on_wait)]
+    procs = [FakeProc(["FETCH4K 32 32 32 NA NA"], on_wait=on_wait)]
     runner = FakeRunner(procs).build()
     runner._poll_interval = 0.01
     runner.probe = lambda path: {"duration": 4.0, "vcodec": "vp9", "acodec": "opus"}
@@ -214,7 +214,7 @@ def test_poll_output_progress_reports_growing_file_size(tmp_path):
 
 def test_stderr_tail_captured_on_failure(tmp_path):
     plan = make_plan(tmp_path)
-    procs = [FakeProc(["YT4K 0 0 0 NA NA"], returncode=1, stderr="boom\nline2\n")]
+    procs = [FakeProc(["FETCH4K 0 0 0 NA NA"], returncode=1, stderr="boom\nline2\n")]
     runner = FakeRunner(procs).build()
     runner.probe = lambda path: {}
     results = runner.run(plan, lambda e: None, CancellationToken())
@@ -227,8 +227,8 @@ def test_batch_continues_after_one_failure(tmp_path):
     plan = make_plan(tmp_path, urls=("https://youtu.be/a", "https://youtu.be/b"),
                       durations=[10.0, 10.0])
     procs = [
-        FakeProc(["YT4K 0 0 0 NA NA"], returncode=1, stderr="bad"),
-        FakeProc(["YT4K 1000 1000 1000 NA NA"], returncode=0),
+        FakeProc(["FETCH4K 0 0 0 NA NA"], returncode=1, stderr="bad"),
+        FakeProc(["FETCH4K 1000 1000 1000 NA NA"], returncode=0),
         FakeProc([], returncode=0),
     ]
     runner = FakeRunner(procs).build()
@@ -247,7 +247,7 @@ def test_playlist_item_uses_numbered_safe_subfolder(tmp_path):
     )
     plan = build_job_plan((), tmp_path, Settings(codec="source", container="mkv"),
                           None, (), (), items=(item,))
-    runner = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"])]).build()
+    runner = FakeRunner([FakeProc(["FETCH4K 1000 1000 1000 NA NA"])]).build()
     runner.probe = lambda path: {"duration": 10.0}
 
     result = runner.run(plan, lambda e: None, CancellationToken())[0]
@@ -270,7 +270,7 @@ def test_playlist_preflight_failure_does_not_start_subprocess_or_abort_batch(tmp
     )
     plan = build_job_plan((), tmp_path, Settings(codec="source", container="mkv"),
                           None, (), (), items=(unavailable, available))
-    fake = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"])] )
+    fake = FakeRunner([FakeProc(["FETCH4K 1000 1000 1000 NA NA"])] )
     runner = fake.build()
     runner.probe = lambda path: {"duration": 10.0}
 
@@ -282,7 +282,7 @@ def test_playlist_preflight_failure_does_not_start_subprocess_or_abort_batch(tmp
 
 def test_cancellation_sends_sigterm_then_waits(tmp_path):
     plan = make_plan(tmp_path)
-    proc = FakeProc(["YT4K 0 0 0 NA NA", "YT4K 100 1000 1000 NA NA"])
+    proc = FakeProc(["FETCH4K 0 0 0 NA NA", "FETCH4K 100 1000 1000 NA NA"])
     fake = FakeRunner([proc])
     runner = fake.build(grace_period=1.0)
     cancel = CancellationToken()
@@ -301,7 +301,7 @@ def test_cancellation_sends_sigterm_then_waits(tmp_path):
 
 def test_cancellation_escalates_to_sigkill_after_grace(tmp_path):
     plan = make_plan(tmp_path)
-    proc = FakeProc(["YT4K 0 0 0 NA NA"])
+    proc = FakeProc(["FETCH4K 0 0 0 NA NA"])
 
     def hang(timeout=None):
         raise subprocess.TimeoutExpired(cmd="yt-dlp", timeout=timeout or 0)
@@ -331,7 +331,7 @@ def test_cancellation_escalates_to_sigkill_after_grace(tmp_path):
 def test_cleanup_limited_to_current_job_temp_dir(tmp_path):
     plan = make_plan(tmp_path)
     procs = [
-        FakeProc(["YT4K 1000 1000 1000 NA NA"]),
+        FakeProc(["FETCH4K 1000 1000 1000 NA NA"]),
         FakeProc([], returncode=0),
     ]
     runner = FakeRunner(procs).build()
@@ -346,7 +346,7 @@ def test_cleanup_limited_to_current_job_temp_dir(tmp_path):
     assert untouched.exists()
     assert (untouched / "file.txt").read_text() == "hello"
     leftover_temp_dirs = [p for p in tmp_path.iterdir()
-                          if p.is_dir() and p.name.startswith(".yt4k-")]
+                          if p.is_dir() and p.name.startswith(".fetch4k-")]
     assert leftover_temp_dirs == []
 
 
@@ -385,7 +385,7 @@ def _no_reencode_plan(tmp_path, urls):
 
 @pytest.fixture
 def _download_writes_mkv(monkeypatch):
-    from yt4k import jobs as jobs_module
+    from fetch4k import jobs as jobs_module
 
     original_fetch = jobs_module.JobRunner._fetch
 
@@ -405,7 +405,7 @@ def test_run_concurrent_downloads_urls_at_the_same_time(tmp_path, _download_writ
     urls = ("https://youtu.be/a", "https://youtu.be/b", "https://youtu.be/c")
     plan = _no_reencode_plan(tmp_path, urls)
     gate = threading.Barrier(3, timeout=2)
-    procs = {u: [FakeProc(["YT4K 1000 1000 1000 NA NA"])] for u in urls}
+    procs = {u: [FakeProc(["FETCH4K 1000 1000 1000 NA NA"])] for u in urls}
     fake = KeyedFakeRunner(procs, gate=gate)
     runner = fake.build()
     runner.probe = lambda path: {"duration": 10.0}
@@ -421,8 +421,8 @@ def test_run_concurrent_preserves_result_order(tmp_path, _download_writes_mkv):
     urls = ("https://youtu.be/a", "https://youtu.be/b")
     plan = _no_reencode_plan(tmp_path, urls)
     procs = {
-        urls[0]: [FakeProc(["YT4K 1000 1000 1000 NA NA"], returncode=1, stderr="bad")],
-        urls[1]: [FakeProc(["YT4K 1000 1000 1000 NA NA"])],
+        urls[0]: [FakeProc(["FETCH4K 1000 1000 1000 NA NA"], returncode=1, stderr="bad")],
+        urls[1]: [FakeProc(["FETCH4K 1000 1000 1000 NA NA"])],
     }
     fake = KeyedFakeRunner(procs)
     runner = fake.build()
@@ -439,7 +439,7 @@ def test_run_concurrent_preserves_result_order(tmp_path, _download_writes_mkv):
 def test_run_concurrent_single_url_falls_back_to_run(tmp_path, _download_writes_mkv):
     urls = ("https://youtu.be/a",)
     plan = _no_reencode_plan(tmp_path, urls)
-    procs = {urls[0]: [FakeProc(["YT4K 1000 1000 1000 NA NA"])]}
+    procs = {urls[0]: [FakeProc(["FETCH4K 1000 1000 1000 NA NA"])]}
     fake = KeyedFakeRunner(procs)
     runner = fake.build()
     runner.probe = lambda path: {"duration": 10.0}
@@ -457,7 +457,7 @@ def _ytdlp_help(text):
 
 def test_fetch_passes_challenge_solver_when_ytdlp_supports_it(tmp_path):
     plan = make_plan(tmp_path)
-    fake = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"]),
+    fake = FakeRunner([FakeProc(["FETCH4K 1000 1000 1000 NA NA"]),
                        FakeProc([])],
                       run_results=[_ytdlp_help("  --remote-components SPEC")])
     runner = fake.build()
@@ -470,7 +470,7 @@ def test_fetch_passes_challenge_solver_when_ytdlp_supports_it(tmp_path):
 
 def test_fetch_omits_challenge_solver_on_older_ytdlp(tmp_path):
     plan = make_plan(tmp_path)
-    fake = FakeRunner([FakeProc(["YT4K 1000 1000 1000 NA NA"]),
+    fake = FakeRunner([FakeProc(["FETCH4K 1000 1000 1000 NA NA"]),
                        FakeProc([])],
                       run_results=[_ytdlp_help("  --newline")])
     runner = fake.build()
@@ -517,7 +517,7 @@ def _titled(video_id="3TEnuDVFYUY", title="Mara Hrudiya May"):
 
 
 def test_output_is_named_for_the_video_title_alone(tmp_path, monkeypatch):
-    from yt4k import jobs as jobs_module
+    from fetch4k import jobs as jobs_module
 
     monkeypatch.setattr(jobs_module.JobRunner, "_fetch",
                         _fetch_named("Mara Hrudiya May [3TEnuDVFYUY].mkv"))
@@ -533,7 +533,7 @@ def test_output_is_named_for_the_video_title_alone(tmp_path, monkeypatch):
 
 
 def test_playlist_output_keeps_only_its_number_and_the_title(tmp_path, monkeypatch):
-    from yt4k import jobs as jobs_module
+    from fetch4k import jobs as jobs_module
 
     monkeypatch.setattr(jobs_module.JobRunner, "_fetch",
                         _fetch_named("Mara Hrudiya May [3TEnuDVFYUY].mkv"))
@@ -551,7 +551,7 @@ def test_playlist_output_keeps_only_its_number_and_the_title(tmp_path, monkeypat
 
 
 def test_title_stem_drops_clip_marker_and_unknown_ids(tmp_path):
-    from yt4k.jobs import _title_stem
+    from fetch4k.jobs import _title_stem
 
     clipped = tmp_path / "Mara Hrudiya May [3TEnuDVFYUY].clip.mkv"
     assert _title_stem(clipped, _titled()) == "Mara Hrudiya May"

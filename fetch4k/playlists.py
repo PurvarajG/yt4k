@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .models import Yt4kError
+from .models import Fetch4kError
 from .parsing import MediaMetadata, normalize_metadata
 from .planning import JobItem
 
@@ -164,7 +164,7 @@ def resolve_source_items(
         kind = classify_url(url)
         scope = scopes[index] if scopes else kind
         if kind is URLKind.AMBIGUOUS and scope not in {URLKind.VIDEO, URLKind.PLAYLIST}:
-            raise Yt4kError("This link contains both a video and a playlist; choose --video or --playlist.")
+            raise Fetch4kError("This link contains both a video and a playlist; choose --video or --playlist.")
         if scope is URLKind.PLAYLIST:
             expansion = expand_playlist(url, runner.playlist_info(url))
             folder = expansion.items[0].playlist_folder if expansion.items else None
@@ -195,7 +195,7 @@ def resolve_source_items(
                 playlist_folder=item.playlist_folder, playlist_position=item.playlist_position,
                 playlist_count=item.playlist_count,
             ))
-        except Yt4kError as error:
+        except Fetch4kError as error:
             refreshed.append(JobItem(
                 url=item.url, metadata=item.metadata, playlist_title=item.playlist_title,
                 playlist_folder=item.playlist_folder, playlist_position=item.playlist_position,

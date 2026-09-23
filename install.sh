@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Installs yt4k on a fresh macOS or Linux machine. Needs nothing preinstalled:
+# Installs fetch4k on a fresh macOS or Linux machine. Needs nothing preinstalled:
 # if there's no Python 3.10+, it fetches one with uv (no sudo, no Homebrew).
 #
 # Everything else - Textual, yt-dlp, ffmpeg/ffprobe, and the Deno JS runtime -
-# is installed into a dedicated venv at ~/.local/share/yt4k/venv, so there's
+# is installed into a dedicated venv at ~/.local/share/fetch4k/venv, so there's
 # no Homebrew step, no apt step, and ~/.local/bin is added to your PATH for
-# you. A `yt4k` launcher goes
+# you. A `fetch4k` launcher goes
 # in ~/.local/bin and runs the script straight out of this folder, so keep
 # the folder where it is; `git pull && ./install.sh` is the update.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
-VENV_DIR="$HOME/.local/share/yt4k/venv"
+VENV_DIR="$HOME/.local/share/fetch4k/venv"
 
-echo "Installing yt4k..."
+echo "Installing fetch4k..."
 mkdir -p "$BIN_DIR"
 
 # Pick a Python 3.10+ to build the venv from. Use the system one when it's
@@ -53,24 +53,24 @@ if [ -z "$PYTHON" ]; then
 fi
 echo "Using $("$PYTHON" --version) at $PYTHON"
 
-# yt4k's dependencies live in their own venv rather than in whatever python3
+# fetch4k's dependencies live in their own venv rather than in whatever python3
 # happens to be first on PATH: many system/Homebrew/conda Pythons refuse
 # "pip install" outright (PEP 668's externally-managed-environment guard),
 # and installing into a moving target breaks silently when that target
 # changes. The launcher below always uses this venv's python3.
 if [ ! -x "$VENV_DIR/bin/python3" ]; then
   rm -rf "$VENV_DIR"
-  echo "Creating yt4k's Python environment at $VENV_DIR..."
+  echo "Creating fetch4k's Python environment at $VENV_DIR..."
   if ! "$PYTHON" -m venv "$VENV_DIR"; then
     echo "Could not create a venv at $VENV_DIR. Check your python3 install and re-run." >&2
     exit 1
   fi
 fi
 
-echo "Installing yt4k's dependencies (Textual, yt-dlp, ffmpeg, Deno)..."
+echo "Installing fetch4k's dependencies (Textual, yt-dlp, ffmpeg, Deno)..."
 if ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip ||
    ! "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade -r "$REPO_DIR/requirements.txt"; then
-  echo "Could not install yt4k's dependencies into $VENV_DIR." >&2
+  echo "Could not install fetch4k's dependencies into $VENV_DIR." >&2
   echo "Check pip and network access, then re-run this script." >&2
   exit 1
 fi
@@ -95,11 +95,25 @@ if [ ! -x "$VENV_DIR/bin/deno" ]; then
   echo "with a 403 unless deno or node is on your PATH." >&2
 fi
 
-cat > "$BIN_DIR/yt4k" <<WRAP
+cat > "$BIN_DIR/fetch4k" <<WRAP
 #!/bin/sh
-PATH="$VENV_DIR/bin:\$PATH" exec "$VENV_DIR/bin/python3" "$REPO_DIR/yt4k.py" "\$@"
+PATH="$VENV_DIR/bin:\$PATH" exec "$VENV_DIR/bin/python3" "$REPO_DIR/fetch4k.py" "\$@"
 WRAP
-chmod +x "$BIN_DIR/yt4k"
+chmod +x "$BIN_DIR/fetch4k"
+
+# fetch4k used to be called yt4k. Carry the settings over and clear out the
+# old launcher and venv, so there's only one command left.
+OLD_CONFIG="$HOME/.config/yt4k"
+NEW_CONFIG="$HOME/.config/fetch4k"
+if [ -d "$OLD_CONFIG" ] && [ ! -e "$NEW_CONFIG" ]; then
+  mv "$OLD_CONFIG" "$NEW_CONFIG"
+  echo "Moved your yt4k settings to $NEW_CONFIG."
+fi
+if [ -f "$BIN_DIR/yt4k" ] && grep -qs 'yt4k.py' "$BIN_DIR/yt4k"; then
+  rm -f "$BIN_DIR/yt4k"
+  echo "Removed the old 'yt4k' command — it's 'fetch4k' now."
+fi
+rm -rf "$HOME/.local/share/yt4k"
 
 # True when ~/yt4k.py is byte-identical to some committed version, i.e. an old
 # install's copy rather than a file someone edited in place.
@@ -115,7 +129,7 @@ stray_is_a_copy() {
   return 1
 }
 
-if [ -f "$HOME/yt4k.py" ] && [ "$HOME/yt4k.py" != "$REPO_DIR/yt4k.py" ]; then
+if [ -f "$HOME/yt4k.py" ] && [ "$HOME/yt4k.py" != "$REPO_DIR/fetch4k.py" ]; then
   if stray_is_a_copy; then
     rm -f "$HOME/yt4k.py"
     echo "Removed the old ~/yt4k.py copy — this folder is the only one now."
@@ -125,10 +139,10 @@ if [ -f "$HOME/yt4k.py" ] && [ "$HOME/yt4k.py" != "$REPO_DIR/yt4k.py" ]; then
   fi
 fi
 
-echo "Installed. Downloads land in ~/Downloads/yt4k by default."
-echo "yt4k runs $REPO_DIR/yt4k.py using the venv at $VENV_DIR — keep this folder where it is."
+echo "Installed. Downloads land in ~/Downloads/fetch4k by default."
+echo "fetch4k runs $REPO_DIR/fetch4k.py using the venv at $VENV_DIR — keep this folder where it is."
 
-# Put ~/.local/bin on PATH in the user's shell rc, once, so `yt4k` just works
+# Put ~/.local/bin on PATH in the user's shell rc, once, so `fetch4k` just works
 # in new terminals.
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -138,13 +152,13 @@ case ":$PATH:" in
       bash) if [ "$(uname)" = Darwin ]; then RC="$HOME/.bash_profile"; else RC="$HOME/.bashrc"; fi ;;
       *) RC="$HOME/.profile" ;;
     esac
-    if ! grep -qs '# added by yt4k' "$RC"; then
-      printf '\nexport PATH="$HOME/.local/bin:$PATH"  # added by yt4k\n' >> "$RC"
+    if ! grep -qsE '# added by (fetch4k|yt4k)' "$RC"; then
+      printf '\nexport PATH="$HOME/.local/bin:$PATH"  # added by fetch4k\n' >> "$RC"
       echo "Added ~/.local/bin to your PATH in $RC."
     fi
-    echo "Open a new terminal (or run: source $RC) before using yt4k."
+    echo "Open a new terminal (or run: source $RC) before using fetch4k."
     ;;
 esac
 
 echo
-echo "Run 'yt4k' to start."
+echo "Run 'fetch4k' to start."

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from yt4k.updater import Updater, looks_stale
+from fetch4k.updater import Updater, looks_stale
 
 
 class FakePip:

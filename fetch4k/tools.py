@@ -1,12 +1,12 @@
-"""Locating the external tools yt4k drives: yt-dlp, ffmpeg, ffprobe.
+"""Locating the external tools fetch4k drives: yt-dlp, ffmpeg, ffprobe.
 
-yt4k ships these itself. The installer pip-installs `yt-dlp` and
-`static-ffmpeg` into yt4k's own venv, so a fresh machine needs nothing but
+fetch4k ships these itself. The installer pip-installs `yt-dlp` and
+`static-ffmpeg` into fetch4k's own venv, so a fresh machine needs nothing but
 Python — no Homebrew, no apt, no manual PATH surgery.
 
 Resolution order:
 
-- **yt-dlp**: the copy next to the running interpreter (yt4k's venv) first.
+- **yt-dlp**: the copy next to the running interpreter (fetch4k's venv) first.
   A stale yt-dlp is the single most common cause of "this video won't
   download", so the one we keep updated wins over whatever an old Homebrew
   or distro install left on PATH.
