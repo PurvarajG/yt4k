@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-yt4k — an interactive YouTube downloader that lives in your terminal.
+yt4k — an interactive video downloader that lives in your terminal:
+YouTube, Pinterest, Instagram, TikTok, X, Vimeo and over a thousand more sites.
 
 Run it bare and it opens a focused, keyboard-first Textual workbench: choose
 a destination, paste a link, review what yt4k understood, and download.
@@ -25,7 +26,7 @@ yt4k's own venv.
 Every interactive session opens by asking where to save, with your default
 highlighted — enter accepts it, [d] on another folder makes that the default.
 Press [f] later, or pass -o DIR, to redirect a session without touching the
-default. Downloads land in ~/Downloads/YouTube 4K until you change that;
+default. Downloads land in ~/Downloads/yt4k until you change that;
 settings persist in ~/.config/yt4k/config.json.
 
 The interactive workbench owns the terminal for its whole lifetime (Textual's
@@ -374,12 +375,14 @@ def main() -> None:
         print(f"  {C.yellow}!{C.reset} {notice.message}", file=sys.stderr)
     s = asdict(settings)
     p = argparse.ArgumentParser(
-        description="Interactive YouTube downloader. Run bare for the "
+        description="Interactive video downloader for YouTube and any site "
+                    "yt-dlp supports. Run bare for the "
                     "Textual workbench, or pass a URL for a one-shot download. "
                     "Plain English after the URL works: "
                     "yt4k URL 1:20 to 3:45 in 1080p mp4")
     p.add_argument("words", nargs="*", metavar="URL [words…]",
-                   help="YouTube video URL, optionally followed by a time "
+                   help="video URL (any site yt-dlp supports), optionally "
+                        "followed by a time "
                         "range and format words")
     p.add_argument("--clip", metavar="RANGE",
                    help="export only this slice, e.g. --clip 1:20-3:45, "

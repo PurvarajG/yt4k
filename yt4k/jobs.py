@@ -83,7 +83,7 @@ _YT_ID_SUFFIX = re.compile(r" \[[A-Za-z0-9_-]{11}\]$")
 
 
 def _title_stem(src: Path, metadata: MediaMetadata) -> str:
-    """Name the finished file after the YouTube video title, nothing else.
+    """Name the finished file after the video title, nothing else.
 
     yt-dlp's working template appends " [id]" so temporary names stay unique,
     and local trimming adds a ".clip" marker. Both are plumbing, and neither

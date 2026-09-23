@@ -1,6 +1,9 @@
 # yt4k
 
-An interactive YouTube (and Pinterest) downloader that lives in your terminal. Run it bare
+An interactive video downloader that lives in your terminal. It started with
+YouTube and now takes a link from any site yt-dlp supports: Instagram, TikTok,
+X, Reddit, Vimeo, Twitch, SoundCloud, Pinterest (images too), and over a
+thousand more. Run it bare
 and it opens a focused, keyboard-first Textual workbench: choose a
 destination, paste a link, review what yt4k understood, and download.
 
@@ -132,6 +135,24 @@ from the workbench runs only failed or cancelled entries. `last 90s` and other
 end-relative clips may read an entry's full metadata when flat playlist data
 does not include its duration; if that lookup fails, only that entry fails.
 
+### Other sites
+
+Any link yt-dlp understands works the same way as a YouTube one: Instagram
+reels, TikToks, X/Twitter and Reddit videos, Vimeo, Twitch VODs and clips,
+SoundCloud tracks, and so on (`yt-dlp --list-extractors` prints the lot).
+The review screen only offers what the source actually has: a 1080p TikTok
+shows no 4K row and says `best available (1080p)`, and "no re-encode" codecs
+the site doesn't serve are hidden. Re-encoding to H.264/HEVC and audio-only
+are always there.
+
+A few limits worth knowing:
+
+- Playlists and channels expand into separate jobs only for YouTube. Other
+  links download as a single video.
+- yt4k doesn't sign in anywhere, so private accounts and members-only posts
+  won't download.
+- DRM streaming services (Netflix, Spotify, and the like) never work.
+
 ### Pinterest
 
 Paste any pin link: `pinterest.com/pin/…`, a regional domain like
@@ -142,8 +163,9 @@ picks the right path:
   codec, audio-only, and clip ranges all apply.
 - **Image pins** are saved as the original full-resolution file, straight
   from Pinterest, with no re-encoding. A carousel pin saves every image,
-  numbered `Title (1).jpg`, `Title (2).jpg`, and so on. Format words and clip
-  ranges don't apply to images.
+  numbered `Title (1).jpg`, `Title (2).jpg`, and so on. The review screen
+  shows just `image · original file`: format, quality, and encoding options
+  don't apply to images, so they're hidden.
 
 Image pins rely on Pinterest's internal pin data, which isn't a public API.
 If Pinterest changes it, the pin fails with a clear error and everything
@@ -189,7 +211,7 @@ because the folder you wanted last week is rarely the one you want today.
 `d` on any folder makes it the new default; `esc` (only from that screen)
 leaves without picking one.
 
-Downloads go to `~/Downloads/YouTube 4K` until you change that, and settings
+Downloads go to `~/Downloads/yt4k` until you change that, and settings
 persist in `~/.config/yt4k/config.json`.
 
 Press `f` from home to point the current session somewhere else — a shoot

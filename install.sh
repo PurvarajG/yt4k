@@ -125,7 +125,7 @@ if [ -f "$HOME/yt4k.py" ] && [ "$HOME/yt4k.py" != "$REPO_DIR/yt4k.py" ]; then
   fi
 fi
 
-echo "Installed. Downloads land in ~/Downloads/YouTube 4K by default."
+echo "Installed. Downloads land in ~/Downloads/yt4k by default."
 echo "yt4k runs $REPO_DIR/yt4k.py using the venv at $VENV_DIR — keep this folder where it is."
 
 # Put ~/.local/bin on PATH in the user's shell rc, once, so `yt4k` just works
