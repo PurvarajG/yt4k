@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .models import JobResult, JobStage, ProgressEvent, Yt4kError
+from .models import JobResult, JobStage, ProgressEvent, Fetch4kError
 from .parsing import Clip, MediaMetadata, clip_section, clip_tag
 from .planning import JobPlan
 from . import pinterest
@@ -75,7 +75,7 @@ class CancellationToken:
         return self._event.is_set()
 
 
-class Cancelled(Yt4kError):
+class Cancelled(Fetch4kError):
     """Raised internally when a job is stopped mid-flight."""
 
 
@@ -83,7 +83,7 @@ _YT_ID_SUFFIX = re.compile(r" \[[A-Za-z0-9_-]{11}\]$")
 
 
 def _title_stem(src: Path, metadata: MediaMetadata) -> str:
-    """Name the finished file after the YouTube video title, nothing else.
+    """Name the finished file after the video title, nothing else.
 
     yt-dlp's working template appends " [id]" so temporary names stay unique,
     and local trimming adds a ".clip" marker. Both are plumbing, and neither
@@ -139,8 +139,8 @@ class JobRunner:
     def _require(self, tool: str) -> str:
         path = self._which(tool)
         if not path:
-            raise Yt4kError(f"'{tool}' is missing. Re-run ./install.sh in the "
-                             f"yt4k folder to reinstall it.")
+            raise Fetch4kError(f"'{tool}' is missing. Re-run ./install.sh in the "
+                             f"fetch4k folder to reinstall it.")
         return path
 
     def _ytdlp(self) -> list[str]:
@@ -217,9 +217,9 @@ class JobRunner:
         if proc.returncode != 0:
             stderr = proc.stderr.read() if proc.stderr else ""
             tail = "\n".join((stderr or "").strip().splitlines()[-8:])
-            raise Yt4kError(
+            raise Fetch4kError(
                 f"{Path(cmd[0]).name} failed (exit {proc.returncode})",
-            ) if not tail else Yt4kError(
+            ) if not tail else Fetch4kError(
                 f"{Path(cmd[0]).name} failed (exit {proc.returncode})\n{tail}"
             )
 
@@ -236,7 +236,7 @@ class JobRunner:
             capture_output=True, text=True,
         )
         if out.returncode != 0:
-            raise Yt4kError("could not read video info (bad URL, or yt-dlp "
+            raise Fetch4kError("could not read video info (bad URL, or yt-dlp "
                              "needs updating)")
         import json
         return json.loads(out.stdout)
@@ -251,15 +251,15 @@ class JobRunner:
         if out.returncode != 0:
             detail = (out.stderr or "").strip().splitlines()
             suffix = f": {detail[-1]}" if detail else ""
-            raise Yt4kError("could not read playlist info (bad URL, private playlist, "
+            raise Fetch4kError("could not read playlist info (bad URL, private playlist, "
                              f"or yt-dlp needs updating){suffix}")
         import json
         try:
             data = json.loads(out.stdout)
         except (TypeError, ValueError) as error:
-            raise Yt4kError("yt-dlp returned invalid playlist metadata") from error
+            raise Fetch4kError("yt-dlp returned invalid playlist metadata") from error
         if not isinstance(data, dict):
-            raise Yt4kError("yt-dlp returned invalid playlist metadata")
+            raise Fetch4kError("yt-dlp returned invalid playlist metadata")
         return data
 
     def probe(self, path: Path) -> dict:
@@ -316,13 +316,13 @@ class JobRunner:
             "-f", fmt, "--no-playlist", "--no-warnings",
             "--newline", "--quiet", "--progress",
             "--progress-template",
-            ("download:YT4K %(progress.downloaded_bytes)s "
+            ("download:FETCH4K %(progress.downloaded_bytes)s "
              "%(progress.total_bytes_estimate)s %(progress.total_bytes)s "
              "%(progress.speed)s %(progress.eta)s"),
             "-o", template,
         ]
         # yt-dlp runs ffmpeg itself to merge streams and to cut sections, and
-        # it looks for ffmpeg on PATH - where yt4k's bundled copy isn't. Point
+        # it looks for ffmpeg on PATH - where fetch4k's bundled copy isn't. Point
         # it at whichever ffmpeg we resolved.
         cmd += ["--ffmpeg-location", str(Path(self._require("ffmpeg")).parent)]
         if merge:
@@ -334,7 +334,7 @@ class JobRunner:
         cmd.append(url)
 
         def on_line(line: str) -> None:
-            if not line.startswith("YT4K "):
+            if not line.startswith("FETCH4K "):
                 return
             _, got, est, tot, speed, eta = (line.split(" ") + ["NA"] * 5)[:6]
             got_b = _num(got) or 0.0
@@ -368,7 +368,7 @@ class JobRunner:
             self._stream(cmd, cancel, on_line)
         files = [p for p in workdir.iterdir() if p.is_file()]
         if not files:
-            raise Yt4kError("yt-dlp produced no file")
+            raise Fetch4kError("yt-dlp produced no file")
         return max(files, key=lambda p: p.stat().st_mtime)
 
     def _poll_output_progress(self, workdir: Path, item_index: int,
@@ -478,7 +478,7 @@ class JobRunner:
                 if self.has_encoder(enc):
                     return enc
         if not self.has_encoder(table[1]):
-            raise Yt4kError(f"ffmpeg has no {table[1]} encoder; enable hardware "
+            raise Fetch4kError(f"ffmpeg has no {table[1]} encoder; enable hardware "
                              f"encoding, or pick 'keep source' as the codec")
         return table[1]
 
@@ -607,7 +607,7 @@ class JobRunner:
             return final
 
         if lossy and not self.has_encoder(codec):
-            raise Yt4kError(f"ffmpeg has no {codec} encoder - pick another "
+            raise Fetch4kError(f"ffmpeg has no {codec} encoder - pick another "
                              f"audio format")
 
         final = _unique(out_dir / f"{stem}.{ext}")
@@ -649,7 +649,7 @@ class JobRunner:
             try:
                 out_dir.resolve().relative_to(plan.destination.resolve())
             except ValueError as error:
-                raise Yt4kError("playlist output folder is unsafe") from error
+                raise Fetch4kError("playlist output folder is unsafe") from error
         out_dir.mkdir(parents=True, exist_ok=True)
         plan.destination.mkdir(parents=True, exist_ok=True)
         images = (metadata.raw or {}).get(pinterest.IMAGES_KEY)
@@ -658,7 +658,7 @@ class JobRunner:
                                    item_count, emit)
         if pinterest.is_pinterest(url):
             url = pinterest.canonical_url(url)
-        workdir = Path(tempfile.mkdtemp(dir=plan.destination, prefix=".yt4k-"))
+        workdir = Path(tempfile.mkdtemp(dir=plan.destination, prefix=".fetch4k-"))
         with self._workdirs_lock:
             self._active_workdirs.add(workdir)
         try:
@@ -714,7 +714,7 @@ class JobRunner:
         except Cancelled:
             return JobResult(url=url, status="cancelled", output_path=None,
                              message="Cancelled")
-        except Yt4kError as error:
+        except Fetch4kError as error:
             return JobResult(url=url, status="failed", output_path=None,
                              message=str(error), technical_detail=str(error))
         except OSError as error:

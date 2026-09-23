@@ -19,7 +19,7 @@ def _launch(env_extra: dict) -> tuple[int, int]:
     env.update(env_extra)
     env["TERM"] = "xterm-256color"
     proc = subprocess.Popen(
-        [sys.executable, str(ROOT / "yt4k.py")],
+        [sys.executable, str(ROOT / "fetch4k.py")],
         stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
         env=env, close_fds=True, start_new_session=True,
     )
@@ -46,7 +46,7 @@ def _read_available(master_fd: int, deadline: float) -> bytes:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="pty is POSIX-only")
-def test_bare_yt4k_lifecycle_restores_terminal(tmp_path):
+def test_bare_fetch4k_lifecycle_restores_terminal(tmp_path):
     home = tmp_path / "home"
     config = tmp_path / "config"
     home.mkdir()

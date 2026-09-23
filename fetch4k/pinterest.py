@@ -17,9 +17,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
-from .models import Yt4kError
+from .models import Fetch4kError
 
-IMAGES_KEY = "_yt4k_images"
+IMAGES_KEY = "_fetch4k_images"
 
 _HOST_RE = re.compile(r"(?:^|\.)(?:pinterest\.[a-z.]+|pin\.it)$", re.I)
 _PIN_ID_RE = re.compile(r"/pin/(?:[^/]*--)?(\d+)")
@@ -49,9 +49,9 @@ def pin_id(url: str) -> str:
             with _open(url) as resp:
                 m = _PIN_ID_RE.search(urllib.parse.urlparse(resp.geturl()).path)
         except OSError as error:
-            raise Yt4kError(f"could not open Pinterest link: {error}") from error
+            raise Fetch4kError(f"could not open Pinterest link: {error}") from error
     if not m:
-        raise Yt4kError("that Pinterest link doesn't point at a pin")
+        raise Fetch4kError("that Pinterest link doesn't point at a pin")
     return m.group(1)
 
 
@@ -105,10 +105,10 @@ def pin_info(url: str, fetch: Callable[[str], dict] | None = None) -> dict:
                 payload = json.load(resp)
         data = payload["resource_response"]["data"]
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Yt4kError("could not read that pin (deleted, private, or "
+        raise Fetch4kError("could not read that pin (deleted, private, or "
                         "Pinterest changed its API)") from error
     if not isinstance(data, dict):
-        raise Yt4kError("could not read that pin (deleted or private)")
+        raise Fetch4kError("could not read that pin (deleted or private)")
 
     title = (data.get("title") or data.get("grid_title")
              or (data.get("description") or "").strip()[:80]
@@ -121,7 +121,7 @@ def pin_info(url: str, fetch: Callable[[str], dict] | None = None) -> dict:
     if not info["is_video"]:
         images = _images_of(data)
         if not images:
-            raise Yt4kError("that pin has no image or video to download")
+            raise Fetch4kError("that pin has no image or video to download")
         info[IMAGES_KEY] = images
     return info
 
@@ -141,6 +141,6 @@ def download_images(urls: list[str], dst_stem: Path,
             tmp.replace(dst)
         except OSError as error:
             tmp.unlink(missing_ok=True)
-            raise Yt4kError(f"could not download pin image: {error}") from error
+            raise Fetch4kError(f"could not download pin image: {error}") from error
         saved.append(dst)
     return saved

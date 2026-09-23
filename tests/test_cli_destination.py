@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import pytest
 
-from yt4k.cli.app import Yt4kApp
-from yt4k.cli.screens.destination import DestinationScreen
-from yt4k.cli.screens.home import HomeScreen
-from yt4k.jobs import JobRunner
-from yt4k.models import Settings, SessionState
-from yt4k.settings import SettingsStore
+from fetch4k.cli.app import Fetch4kApp
+from fetch4k.cli.screens.destination import DestinationScreen
+from fetch4k.cli.screens.home import HomeScreen
+from fetch4k.jobs import JobRunner
+from fetch4k.models import Settings, SessionState
+from fetch4k.settings import SettingsStore
 from textual.widgets import Input, OptionList
 
 
 def make_app(tmp_path, settings=None):
     store = SettingsStore(tmp_path / "config.json")
     state = SessionState(settings=settings or Settings())
-    return Yt4kApp(state=state, store=store, runner=JobRunner())
+    return Fetch4kApp(state=state, store=store, runner=JobRunner())
 
 
 @pytest.mark.asyncio

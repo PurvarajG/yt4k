@@ -1,206 +1,255 @@
-# yt4k
+<div align="center">
 
-An interactive YouTube (and Pinterest) downloader that lives in your terminal. Run it bare
-and it opens a focused, keyboard-first Textual workbench: choose a
-destination, paste a link, review what yt4k understood, and download.
+# ⚡ fetch4k
 
-## Install
+**Paste a link. Get the file.**<br>
+A keyboard-first video downloader that lives in your terminal.
 
-One command on a fresh Mac or Linux machine. You don't need Python,
-Homebrew, ffmpeg, or anything else installed first; only `git`:
+YouTube · Instagram · TikTok · X · Reddit · Vimeo · Twitch · SoundCloud · Pinterest · *and over a thousand more*
 
-```bash
-git clone https://github.com/PurvarajG/yt4k.git && cd yt4k && ./install.sh
+![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
+![Built on yt-dlp](https://img.shields.io/badge/built%20on-yt--dlp-red?style=flat-square)
+![Textual](https://img.shields.io/badge/UI-Textual-5a4fcf?style=flat-square)
+
+</div>
+
+```text
+$ fetch4k https://youtu.be/dQw4w9WgXcQ 1:20 to 3:45 in 1080p mp4
+
+ REVIEW
+ 1 link   Rick Astley - Never Gonna Give You Up
+ ~/Downloads/fetch4k
+ FROM YOUR REQUEST   1080p  mp4
+
+   format         video
+   quality        1080p
+   encoding       keep source (no re-encode)
+   container      mp4
+   clip           01:20 → 03:45
+ ▸ Download
 ```
 
-Then open a new terminal and run `yt4k`.
+---
 
-> On a brand-new Mac, the first `git` command may pop up "install command line
-> developer tools". Click **Install**, wait for it to finish, and run the line
-> again.
+## ✨ Why fetch4k
 
-What `install.sh` does for you:
+|  |  |
+|---|---|
+| 🎬 **Up to 4K, no quality loss** | Grabs the best streams the site has and keeps them as they are. Re-encoding only happens if you ask for it. |
+| 🗣️ **Just say what you want** | `first 30s`, `just the audio as mp3`, `12:00 to the end in 720p`. Plain English after the link. |
+| ✂️ **Clip before you download** | Only the part you asked for is downloaded, and it's cut at the exact timestamps. |
+| 🎯 **Only options that apply** | A 1080p TikTok won't offer 4K, and an image pin skips the video settings entirely. |
+| 📚 **Whole YouTube playlists** | Every video becomes its own job, numbered in order, and one broken video doesn't stop the rest. |
+| 🖼️ **Pinterest images too** | Image pins and carousels are saved as the full-size originals. |
+| 🔄 **Keeps itself working** | It updates yt-dlp every day, and again on the spot if a site starts blocking downloads. |
+| 🧼 **Zero setup** | One command installs everything into its own folder. No Homebrew, no admin password. |
 
-- **Python**: uses your Python if it's 3.10 or newer. If not, it downloads a
-  private Python 3.12 with [uv](https://docs.astral.sh/uv/) into
-  `~/.local`. No admin password, no Homebrew, and your system Python stays
-  untouched.
-- **Everything yt4k needs**: [Textual](https://textual.textualize.io/),
-  [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), static `ffmpeg`/`ffprobe`,
-  and [Deno](https://deno.com/) (the JavaScript runtime yt-dlp uses to get
-  past YouTube's signature check; without it downloads fail with a 403).
-  All of it goes into a dedicated venv at `~/.local/share/yt4k/venv`, so it
-  never fights your system, Homebrew, or conda Python. If you already have
-  `ffmpeg` installed, yt4k uses yours instead of the bundled copy.
-- **The `yt4k` command**: a launcher in `~/.local/bin` that runs `yt4k.py`
-  straight out of this folder (so keep the folder where it is). If
-  `~/.local/bin` isn't on your `PATH`, it adds it to your shell rc file
-  (`~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or `~/.profile`) once.
-- It also removes `~/yt4k.py` if an older install left that copy behind.
+---
 
-Running `./install.sh` again is always safe; it repairs or refreshes whatever
-is missing.
+## 🚀 Install
 
-To update:
+You only need `git`. The installer takes care of everything else.
+
+```bash
+git clone https://github.com/PurvarajG/yt4k.git fetch4k && cd fetch4k && ./install.sh
+```
+
+Open a new terminal and run **`fetch4k`**.
+
+> [!TIP]
+> On a brand-new Mac, `git` may ask to install the *command line developer tools*. Click **Install**, wait, then run the line again.
+
+**Update** at any time from inside the folder:
 
 ```bash
 git pull && ./install.sh
 ```
 
-`git pull` alone updates yt4k itself; re-running `./install.sh` also refreshes
-the bundled `yt-dlp`.
+<details>
+<summary><b>What does <code>install.sh</code> actually do?</b></summary>
 
-You shouldn't often need that second part. YouTube changes how it serves video
-every few weeks, and an out-of-date `yt-dlp` is the usual reason downloads
-suddenly start failing, so yt4k keeps its own copy current: it checks once a
-day in the background, and if a download fails in a way that looks like YouTube
-outrunning `yt-dlp` (a 403, a failed signature challenge), it updates on the
-spot and retries. To force it:
+<br>
 
-```bash
-yt4k --update
-```
+- **Python.** Uses yours if it's 3.10 or newer. If not, it downloads a private Python 3.12 into `~/.local` with [uv](https://docs.astral.sh/uv/). It doesn't need `sudo` and doesn't touch your system Python.
+- **Dependencies.** Installs [Textual](https://textual.textualize.io/), [yt-dlp](https://github.com/yt-dlp/yt-dlp), static `ffmpeg`/`ffprobe`, and [Deno](https://deno.com/) into a dedicated venv at `~/.local/share/fetch4k/venv`. yt-dlp needs Deno for YouTube's signature check; without it, downloads fail with a 403. If you already have `ffmpeg` installed, fetch4k uses yours.
+- **The command.** Puts a `fetch4k` launcher in `~/.local/bin` and adds that folder to your shell's `PATH` once. The launcher runs the code straight from the cloned folder, so leave the folder where it is.
+- **Safe to re-run.** Running it again repairs or refreshes anything that's missing.
 
-This only ever touches yt4k's own venv - a `yt-dlp` you installed through
-Homebrew, apt, or pipx is left alone.
+</details>
 
-## Use
+<details>
+<summary><b>Upgrading from yt4k?</b></summary>
 
-```bash
-yt4k                       # interactive Textual workbench
-yt4k URL                   # one-shot, uses your saved settings
-yt4k URL --res 1080 --codec h264
-yt4k URL --audio wav
-yt4k PLAYLIST_URL              # downloads each playlist entry in order
-yt4k WATCH_URL?list=PLAYLIST --playlist
-yt4k PINTEREST_PIN_URL      # a pin's video, or its original image(s)
-yt4k URL -v                # raw yt-dlp / ffmpeg firehose
-yt4k --update              # refresh yt-dlp now (also happens daily)
-```
+<br>
 
-### Say what you want
+fetch4k used to be called **yt4k**. Run `git pull && ./install.sh` once. It moves your settings to `~/.config/fetch4k`, removes the old `yt4k` command and venv, and installs `fetch4k` in their place.
 
-After the link — in the paste box or on the command line — just describe the
-download in plain English. The same line can carry a time range and the
-format you want.
+</details>
+
+---
+
+## 🎮 Use
 
 ```bash
-yt4k URL 2:10 to 4:05                  # export only that slice
-yt4k URL 12:00 to the end              # …and 'start to 4:05' for the opening
-yt4k URL first 30s in 1080p mp4
-yt4k URL just the audio as mp3 320k
-yt4k URL from 12:00 h265 small file    # 12:00 to the end, re-encoded
-yt4k URL 1:20-3:45 --explain           # show what it understood, download nothing
+fetch4k                          # open the interactive workbench
+fetch4k URL                      # one-shot download with your saved settings
+fetch4k URL --res 1080 --codec h264
+fetch4k URL --audio wav
+fetch4k PLAYLIST_URL             # every entry, in order
+fetch4k URL -o ~/Desktop/clips   # save somewhere else, just this once
+fetch4k URL --explain            # show what it understood, download nothing
+fetch4k --update                 # refresh yt-dlp now
 ```
 
-**Time ranges** — `2:10 to 4:05`, `2:10-4:05`, `1h02m to 1h05m30s`,
-`first 30s`, `last 90s`, or bare seconds (`90 to 225`). Either edge can be a
-word instead of a number: `2:10 to the end`, `from 12:00`, `start to 4:05`,
-`beginning to 3:00`, `until 0:45`. Clips are fetched with yt-dlp's `--download-sections`, so only
-the segment comes down the wire, and cuts land on the exact timestamps
-(switch to faster keyframe cuts under `[s]` → *clip cuts*). The time range
-ends up in the filename: `Title [id] (2m10s-4m05s).mp4`. There's also
-`--clip 1:20-3:45` if you prefer a flag.
+### 🗣️ Say it in plain English
 
-**Format words** — resolution (`4k`, `1440p`, `1080p`, `720p`, `480p`,
-`best quality`), codec (`av1`, `vp9`, `h264`, `h265`/`hevc`, `keep source`),
-container (`mp4`, `mkv`), audio (`just the audio`, `mp3`, `wav`, `flac`,
-`m4a`, `opus`, `320k`), and shorthands (`fast`, `smaller file`,
-`high quality`). Say `convert to h264` to force a re-encode; a bare `h264`
-just prefers the stream YouTube already has. Explicit flags always beat
-words, and audio words override any resolution you also mentioned.
+Anything after the link describes the download you want. This works on the command line and in the workbench's paste box.
 
-Whatever it read back is shown on the review screen before anything
-downloads, so a misread is one keypress from being fixed.
+```bash
+fetch4k URL 2:10 to 4:05                  # just that slice
+fetch4k URL first 30s in 1080p mp4
+fetch4k URL last 90s
+fetch4k URL just the audio as mp3 320k
+fetch4k URL from 12:00 h265 small file    # 12:00 to the end, re-encoded small
+```
 
-### Playlists
+| You can say… | Examples |
+|---|---|
+| **Time ranges** | `2:10 to 4:05` · `2:10-4:05` · `1h02m to 1h05m30s` · `first 30s` · `last 90s` · `from 12:00` · `start to 4:05` · `2:10 to the end` |
+| **Resolution** | `4k` · `1440p` · `1080p` · `720p` · `480p` · `best quality` |
+| **Codec** | `av1` · `vp9` · `h264` · `h265` / `hevc` · `keep source` · `convert to h264` |
+| **Container** | `mp4` · `mkv` |
+| **Audio** | `just the audio` · `mp3` · `wav` · `flac` · `m4a` · `opus` · `320k` |
+| **Shorthands** | `fast` · `smaller file` · `high quality` |
 
-Paste a YouTube playlist URL in the workbench or pass it to `yt4k`; every
-available entry becomes its own job and uses the same quality, audio, clip,
-and conversion settings. The review screen shows the playlist title, entry
-count, and any entries yt-dlp already knows are unavailable. One failed,
-private, or deleted item does not stop the others.
+A bare `h264` picks the H.264 version the site already has. Saying `convert to h264` forces a re-encode. Flags always win over words, and the review screen shows exactly what fetch4k understood before anything downloads.
 
-A link that includes both a video and `list=` needs an explicit scope. The
-workbench asks for each such link. In a one-shot command, pass `--video` for
-that video alone or `--playlist` for the whole list; yt4k refuses to guess.
+---
 
-Playlist files land in a safe folder under your selected destination, named
-after the playlist plus its stable list ID. Names begin with their original
-playlist position (`001 - …`), even when jobs finish out of order. Retrying
-from the workbench runs only failed or cancelled entries. `last 90s` and other
-end-relative clips may read an entry's full metadata when flat playlist data
-does not include its duration; if that lookup fails, only that entry fails.
+## 🌍 Supported sites
 
-### Pinterest
+fetch4k handles any link [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). Some common ones:
 
-Paste any pin link: `pinterest.com/pin/…`, a regional domain like
-`in.pinterest.com`, or a `pin.it/…` short link. yt4k reads the pin first and
-picks the right path:
+| Social | Video | Audio | Other |
+|---|---|---|---|
+| Instagram | YouTube | SoundCloud | TED |
+| TikTok | Vimeo | Bandcamp | Internet Archive |
+| X / Twitter | Twitch | Mixcloud | BBC, CNN |
+| Reddit | Dailymotion |  | Loom |
+| Facebook | Bilibili |  | Pinterest 🖼️ |
 
-- **Video pins** go through yt-dlp like any other video, so resolution,
-  codec, audio-only, and clip ranges all apply.
-- **Image pins** are saved as the original full-resolution file, straight
-  from Pinterest, with no re-encoding. A carousel pin saves every image,
-  numbered `Title (1).jpg`, `Title (2).jpg`, and so on. Format words and clip
-  ranges don't apply to images.
+> [!NOTE]
+> - Playlists and channels expand into separate downloads only on **YouTube**. Links from other sites download as a single video.
+> - fetch4k doesn't sign in anywhere, so **private accounts and members-only posts** won't work.
+> - **DRM services** such as Netflix, Disney+ and Spotify are never supported.
 
-Image pins rely on Pinterest's internal pin data, which isn't a public API.
-If Pinterest changes it, the pin fails with a clear error and everything
-else keeps working.
+<details>
+<summary><b>📚 Playlists</b></summary>
 
-### Inside the workbench
+<br>
 
-Every interactive session opens on the **destination screen** — it's always
-first, and it's the one thing yt4k always asks before doing anything else.
-Your saved default is highlighted; `enter` uses it for this session, `d` on
-any folder (default, a recent one, or a path you type or paste) also makes it
-the new default, and `esc` leaves yt4k since no destination was chosen yet.
+Paste a YouTube playlist link and every available video becomes its own job, using the same quality, clip and format settings. The review screen shows the playlist name, how many videos it has, and any that are already known to be unavailable. A private or deleted video fails on its own and the rest keep going.
 
-From there you land on the **home screen**, with the request box focused and
-your destination and current format visible above it. Paste one or more
-space-separated links, optionally followed by a time range or format words,
-and press enter. Every valid request opens the **review screen** — title,
-destination, quality/format, clip range, and anything it read from your
-words, with `Download` focused. Arrow keys move between fields, `enter`
-cycles a field's value or confirms `Download`, and `esc` goes back to home
-with your request preserved.
+Files go into a folder named after the playlist and numbered in playlist order (`001 - …`), even when downloads finish out of order. **Retry** only re-runs the videos that failed.
 
-Confirming opens the **download screen**: stage, progress, size, speed, and
-ETA for the active file (and batch position for more than one). `ctrl+c`
-cancels — press it again during cleanup to force an exit. When it's done you
-get one obvious action back to home, plus retry / edit-settings on failure.
+If a link has both a video and a `list=` in it, the workbench asks which one you mean. For a one-shot download, add `--video` or `--playlist`.
 
-| key | where | does |
-|---|---|---|
-| `enter` | destination | use the highlighted folder for this session |
-| `d` | destination | use it, and make it the new default |
+</details>
+
+<details>
+<summary><b>🖼️ Pinterest</b></summary>
+
+<br>
+
+Works with `pinterest.com/pin/…` links, regional domains such as `in.pinterest.com`, and `pin.it/…` short links.
+
+- **Video pins** download like any other video, so every quality, codec, audio and clip option applies.
+- **Image pins** are saved as the original full-size file. A carousel saves every image as `Title (1).jpg`, `Title (2).jpg` and so on. The review screen just shows `image · original file`, because there's nothing to configure.
+
+Image pins rely on Pinterest's internal pin data, which isn't a public API. If Pinterest changes it, you'll get a clear error and everything else keeps working.
+
+</details>
+
+---
+
+## ⌨️ The workbench
+
+Run `fetch4k` on its own and you get four screens:
+
+```text
+ Destination  ─▶  Home  ─▶  Review  ─▶  Download
+ where to save    paste     check it     progress, speed, ETA
+```
+
+1. **Destination.** Always asked first. Pick a folder for this session, or press `d` to make it your new default.
+2. **Home.** Paste one or more links, add plain-English extras if you like, and press `enter`.
+3. **Review.** Shows the title, destination, format, quality and clip range. Change any field with the arrow keys, then press `enter` on **Download**.
+4. **Download.** Shows live progress. When it finishes you can go home, retry what failed, or change settings.
+
+| Key | Where | Does |
+|:---:|---|---|
+| `enter` | destination | use this folder for this session |
+| `d` | destination | use it **and** make it the default |
 | `f` | home | change where this session saves |
-| `s` | home | settings — resolution, codec, audio format |
-| `?` | home | help — searchable keys and request syntax |
-| `←→` / `enter` | review | change a field / confirm `Download` |
-| `ctrl+c` | download | cancel (again to force-exit during cleanup) |
-| `esc` | any screen | back, or quit from destination/home |
+| `s` | home | settings: resolution, codec, audio |
+| `?` | home | searchable help |
+| `← →` | review | change the highlighted field |
+| `ctrl+c` | download | cancel (press again to force quit) |
+| `esc` | anywhere | back, or quit |
 
-### Where things land
+---
 
-The destination screen asks where to save on every interactive session,
-because the folder you wanted last week is rarely the one you want today.
-`d` on any folder makes it the new default; `esc` (only from that screen)
-leaves without picking one.
+## 📁 Where things go
 
-Downloads go to `~/Downloads/YouTube 4K` until you change that, and settings
-persist in `~/.config/yt4k/config.json`.
+| What | Where |
+|---|---|
+| Downloads | `~/Downloads/fetch4k` (change it with `d` on the destination screen, or `-o` for one run) |
+| Settings | `~/.config/fetch4k/config.json` |
+| Dependencies | `~/.local/share/fetch4k/venv` |
 
-Press `f` from home to point the current session somewhere else — a shoot
-folder, an external drive, a project directory. The picker lists your default
-plus the last few folders you used; `enter` uses one for this session only,
-`d` also makes it the new default. `yt4k URL -o ~/Desktop/clips` does the
-same for a one-shot run. Either way the saved default is left alone unless
-you ask for it, so a one-off destination can't quietly become permanent.
+Choosing a folder for one session never changes your saved default unless you press `d`.
 
-## Moving to another machine
+---
 
-Run the one-line install above on the new machine. That's it. Your
-settings and downloads are per-machine (not synced by this repo); the
-installer only needs this folder to set things up fresh.
+## 🛠️ Troubleshooting
+
+<details>
+<summary><b>Downloads suddenly fail with 403 or a "signature" error</b></summary>
+
+<br>
+
+YouTube changes how it serves video every few weeks. fetch4k checks for a new yt-dlp once a day, and when a failure looks like this it updates and retries on the spot. To force an update yourself:
+
+```bash
+fetch4k --update
+```
+
+This only updates fetch4k's own copy. A yt-dlp you installed with Homebrew, apt or pipx is left alone.
+
+</details>
+
+<details>
+<summary><b><code>fetch4k: command not found</code></b></summary>
+
+<br>
+
+Open a **new** terminal window after installing. If it's still missing, go into the folder you cloned and run `./install.sh` again.
+
+</details>
+
+<details>
+<summary><b>Moving to a new machine</b></summary>
+
+<br>
+
+Run the install line on the new machine. Settings and downloads stay on each machine; nothing is synced.
+
+</details>
+
+---
+
+<div align="center">
+<sub>Built on <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a>, <a href="https://ffmpeg.org">FFmpeg</a> and <a href="https://textual.textualize.io">Textual</a>. Only download content you have the right to.</sub>
+</div>

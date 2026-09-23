@@ -5,7 +5,7 @@ from textual.widgets import Static
 
 
 class WorkbenchHeader(Static):
-    """One-line YT4K wordmark, screen label, and optional step/status."""
+    """One-line FETCH4K wordmark, screen label, and optional step/status."""
 
     DEFAULT_CSS = """
     WorkbenchHeader {
@@ -25,7 +25,7 @@ class WorkbenchHeader(Static):
         self.status = status
 
     def render(self) -> str:
-        parts = ["YT4K"]
+        parts = ["FETCH4K"]
         if self.screen_label:
             parts.append(self.screen_label)
         if self.status:

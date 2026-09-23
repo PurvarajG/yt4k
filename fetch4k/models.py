@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Literal
 
 
-class Yt4kError(Exception):
-    """A recoverable yt4k domain or job error."""
+class Fetch4kError(Exception):
+    """A recoverable fetch4k domain or job error."""
 
 
-class ValidationError(Yt4kError):
+class ValidationError(Fetch4kError):
     def __init__(self, field: str, message: str):
         super().__init__(message)
         self.field = field
@@ -30,7 +30,7 @@ class Settings:
     audio_bitrate: str = "192k"
     keep_source: bool = False
     clip_precise: bool = True
-    output_dir: str = "~/Downloads/YouTube 4K"
+    output_dir: str = "~/Downloads/fetch4k"
     recent_dirs: tuple[str, ...] = ()
 
 

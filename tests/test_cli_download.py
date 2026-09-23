@@ -5,14 +5,14 @@ import time
 
 import pytest
 
-from yt4k.cli.app import Yt4kApp
-from yt4k.cli.screens.download import DownloadScreen
-from yt4k.cli.screens.home import HomeScreen
-from yt4k.jobs import JobRunner
-from yt4k.models import JobResult, JobStage, ProgressEvent, Settings, SessionState
-from yt4k.parsing import MediaMetadata
-from yt4k.planning import build_job_plan
-from yt4k.settings import SettingsStore
+from fetch4k.cli.app import Fetch4kApp
+from fetch4k.cli.screens.download import DownloadScreen
+from fetch4k.cli.screens.home import HomeScreen
+from fetch4k.jobs import JobRunner
+from fetch4k.models import JobResult, JobStage, ProgressEvent, Settings, SessionState
+from fetch4k.parsing import MediaMetadata
+from fetch4k.planning import build_job_plan
+from fetch4k.settings import SettingsStore
 
 
 def make_plan(tmp_path, urls=("https://youtu.be/a",), duration=100.0):
@@ -66,7 +66,7 @@ def make_app(tmp_path, runner):
     store = SettingsStore(tmp_path / "config.json")
     state = SessionState(settings=Settings(), destination=tmp_path / "out",
                          results=[])
-    return Yt4kApp(state=state, store=store, runner=runner)
+    return Fetch4kApp(state=state, store=store, runner=runner)
 
 
 async def _wait_for(predicate, tries=40):

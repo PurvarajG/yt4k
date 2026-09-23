@@ -7,7 +7,7 @@ from textual import events, work
 from textual.app import App
 
 from ..jobs import JobRunner
-from ..models import SessionState, ValidationError, Yt4kError
+from ..models import SessionState, ValidationError, Fetch4kError
 from ..parsing import parse_request
 from ..playlists import URLKind, classify_url, resolve_source_items
 from ..planning import JobPlan, build_job_plan
@@ -23,7 +23,7 @@ MIN_WIDTH = 40
 MIN_HEIGHT = 12
 
 
-class Yt4kApp(App):
+class Fetch4kApp(App):
     """Owns session state, screen routing, workers, and terminal restoration."""
 
     CSS_PATH = "theme.tcss"
@@ -106,7 +106,7 @@ class Yt4kApp(App):
                 (), self.state.destination, parsed.settings,
                 parsed.clip, parsed.modifiers, (), items=items,
             )
-        except (ValidationError, Yt4kError) as error:
+        except (ValidationError, Fetch4kError) as error:
             self.call_from_thread(self._show_home_error, str(error))
             return
         self.call_from_thread(self._push_review, plan)

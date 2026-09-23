@@ -13,9 +13,11 @@ from textual.widgets.option_list import Option
 from ...models import Settings
 from ...planning import JobPlan
 from ..fields import (
-    AUDIO_BITRATES, CONTAINERS, MODES, RESOLUTIONS, VIDEO_CODECS,
-    cycle_field, is_lossy, label_of,
+    CONTAINERS, MODES, codec_choices, cycle_choice, cycle_field,
+    effective_choice, is_lossy, label_of, resolution_choices, source_codecs,
+    source_heights,
 )
+from ... import pinterest
 from ..widgets.common import ContextFooter, MinimumSizeGuard, WorkbenchHeader
 
 DOWNLOAD_OPTION_ID = "row-download"
@@ -40,15 +42,36 @@ class ReviewScreen(Screen):
         super().__init__(**kwargs)
         self.plan = plan
         self.draft_settings: Settings = plan.settings
+        # Only offer what these sources can actually deliver: no 4K row for a
+        # 1080p clip, no AV1 row for a site that only serves H.264.
+        self.resolutions = resolution_choices(source_heights(plan.metadata))
+        self.codecs = codec_choices(source_codecs(plan.metadata))
+        self.images_only = bool(plan.items) and all(
+            (item.metadata.raw or {}).get(pinterest.IMAGES_KEY)
+            for item in plan.items)
+
+    def _choices(self, key: str) -> list | None:
+        table = {"res": self.resolutions, "codec": self.codecs}.get(key)
+        return [value for value, _label in table] if table else None
+
+    def _effective(self, key: str):
+        values = self._choices(key)
+        fallback = {"res": 0, "codec": "source"}[key]
+        return effective_choice(getattr(self.draft_settings, key), values, fallback)
 
     def _rows(self) -> list[tuple[str, str, str, bool]]:
         s = self.draft_settings
+        if self.images_only:
+            # Images are saved byte-for-byte; there is nothing to choose.
+            return [("_image", "format", "image · original file", False)]
         video = s.mode == "video"
         rows = [("mode", "format", label_of(MODES, s.mode), True)]
         if video:
             rows += [
-                ("res", "quality", label_of(RESOLUTIONS, s.res), True),
-                ("codec", "encoding", label_of(VIDEO_CODECS, s.codec), True),
+                ("res", "quality",
+                 label_of(self.resolutions, self._effective("res")), True),
+                ("codec", "encoding",
+                 label_of(self.codecs, self._effective("codec")), True),
                 ("container", "container", label_of(CONTAINERS, s.container), True),
             ]
         else:
@@ -123,9 +146,14 @@ class ReviewScreen(Screen):
 
     def _cycle(self, step: int) -> None:
         key = self._highlighted_key()
-        if key is None or key == "_clip":
+        if key is None or key.startswith("_"):
             return
-        self.draft_settings = cycle_field(self.draft_settings, key, step)
+        values = self._choices(key)
+        if values:
+            current = replace(self.draft_settings, **{key: self._effective(key)})
+            self.draft_settings = cycle_choice(current, key, values, step)
+        else:
+            self.draft_settings = cycle_field(self.draft_settings, key, step)
         self._refresh_rows()
 
     def action_cycle_left(self) -> None:

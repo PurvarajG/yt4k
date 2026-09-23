@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from yt4k.models import Settings, ValidationError
-from yt4k.settings import SettingsStore, remember_destination, validate_destination
+from fetch4k.models import Settings, ValidationError
+from fetch4k.settings import SettingsStore, remember_destination, validate_destination
 
 
 def test_defaults_and_unknown_keys_are_safe(tmp_path: Path):
@@ -78,6 +78,6 @@ def test_validate_destination_rejects_unwritable(tmp_path: Path, monkeypatch):
     def raise_permission(*args, **kwargs):
         raise PermissionError("nope")
 
-    monkeypatch.setattr("yt4k.settings.tempfile.NamedTemporaryFile", raise_permission)
+    monkeypatch.setattr("fetch4k.settings.tempfile.NamedTemporaryFile", raise_permission)
     with pytest.raises(ValidationError, match="writable"):
         validate_destination(str(target))

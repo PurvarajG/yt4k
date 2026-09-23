@@ -1,7 +1,7 @@
 import pytest
 
-from yt4k import pinterest
-from yt4k.models import Yt4kError
+from fetch4k import pinterest
+from fetch4k.models import Fetch4kError
 
 
 def _payload(**data):
@@ -51,6 +51,6 @@ def test_video_pin_is_left_for_ytdlp():
 
 
 def test_missing_pin_raises_friendly_error():
-    with pytest.raises(Yt4kError):
+    with pytest.raises(Fetch4kError):
         pinterest.pin_info("https://www.pinterest.com/pin/42/",
                            fetch=lambda _: {"resource_response": {"data": None}})
