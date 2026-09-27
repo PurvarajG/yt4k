@@ -50,7 +50,23 @@ $ fetch4k https://youtu.be/dQw4w9WgXcQ 1:20 to 3:45 in 1080p mp4
 
 ## 🚀 Install
 
-You only need `git`. The installer takes care of everything else.
+### Homebrew (macOS & Linux)
+
+```bash
+brew install purvarajg/tap/fetch4k
+```
+
+That's it. Homebrew brings Python, ffmpeg, yt-dlp and Deno along with it. Run **`fetch4k`** to start.
+
+**Update** with:
+
+```bash
+brew upgrade fetch4k
+```
+
+### From source
+
+No Homebrew? You only need `git`, and the installer takes care of everything else.
 
 ```bash
 git clone https://github.com/PurvarajG/yt4k.git fetch4k && cd fetch4k && ./install.sh
