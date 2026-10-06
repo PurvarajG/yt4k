@@ -51,6 +51,8 @@ from fetch4k.parsing import normalize_metadata, parse_request as core_parse_requ
 from fetch4k.playlists import URLKind, classify_url, resolve_source_items
 from fetch4k.planning import build_job_plan
 from fetch4k.settings import SettingsStore
+from fetch4k import __version__
+from fetch4k.selfupdate import SelfUpdater
 from fetch4k.updater import Updater, looks_stale
 
 CONFIG_PATH = Path("~/.config/fetch4k/config.json").expanduser()
@@ -366,6 +368,18 @@ def run_interactive() -> None:
 
 # ---------------------------------------------------------------------- main
 
+def maybe_self_update(force: bool = False) -> None:
+    """Update fetch4k in front of the user, then restart into the new version.
+
+    Only for a person at a terminal: a script or pipe shouldn't have its
+    command swapped out from under it. `--update` always counts as asking.
+    """
+    if not force and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    SelfUpdater(say=lambda message: print(
+        f"  {C.grey}{message}{C.reset}", file=sys.stderr)).run(force=force)
+
+
 def main() -> None:
     global VERBOSE, SESSION_DIR
 
@@ -415,8 +429,10 @@ def main() -> None:
                    help="download again even if the file is already in the "
                         "destination folder (the default is to skip it)")
     p.add_argument("--update", action="store_true",
-                   help="update yt-dlp now and exit (fetch4k also does this "
-                        "daily on its own)")
+                   help="update fetch4k and yt-dlp now and exit (fetch4k also "
+                        "does this on its own)")
+    p.add_argument("--version", action="version",
+                   version=f"fetch4k {__version__}")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="show raw yt-dlp / ffmpeg output instead of bars")
     # Back-compat with the old flag names.
@@ -427,8 +443,11 @@ def main() -> None:
     VERBOSE = args.verbose
 
     if args.update:
+        maybe_self_update(force=True)
         print(f"  {Updater().update_now().describe()}")
         return
+    if not args.explain:
+        maybe_self_update()
 
     # Plain English first, so explicit flags below always win over words.
     raw = " ".join(args.words)

@@ -58,7 +58,7 @@ brew install purvarajg/tap/fetch4k
 
 That's it. Homebrew brings Python, ffmpeg, yt-dlp and Deno along with it. Run **`fetch4k`** to start.
 
-**Update** with:
+**Updates** happen on their own. When you run `fetch4k` and a newer release exists, it runs `brew upgrade fetch4k` right there in your terminal and restarts into the new version. You can also run it yourself:
 
 ```bash
 brew upgrade fetch4k
@@ -77,7 +77,7 @@ Open a new terminal and run **`fetch4k`**.
 > [!TIP]
 > On a brand-new Mac, `git` may ask to install the *command line developer tools*. Click **Install**, wait, then run the line again.
 
-**Update** at any time from inside the folder:
+**Updates** happen on their own: when a newer release exists, fetch4k pulls it and re-runs the installer before it starts. To do it by hand, from inside the folder:
 
 ```bash
 git pull && ./install.sh
@@ -117,7 +117,7 @@ fetch4k PLAYLIST_URL             # every entry, in order
 fetch4k URL -o ~/Desktop/clips   # save somewhere else, just this once
 fetch4k URL --explain            # show what it understood, download nothing
 fetch4k PLAYLIST_URL --redownload  # fetch again even if the files already exist
-fetch4k --update                 # refresh yt-dlp now
+fetch4k --update                 # update fetch4k and yt-dlp now
 ```
 
 ### 🗣️ Say it in plain English
@@ -237,7 +237,7 @@ Choosing a folder for one session never changes your saved default unless you pr
 
 <br>
 
-YouTube changes how it serves video every few weeks. fetch4k checks for a new yt-dlp once a day, and when a failure looks like this it updates and retries on the spot. To force an update yourself:
+YouTube changes how it serves video every few weeks. fetch4k checks for a new yt-dlp once a day, and when a failure looks like this it updates and retries on the spot. fetch4k itself updates the same way: it checks GitHub for a newer release each time you start it, and set `FETCH4K_NO_SELF_UPDATE=1` to turn that off. To force an update yourself:
 
 ```bash
 fetch4k --update
