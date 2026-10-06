@@ -326,7 +326,7 @@ def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path,
     # them work out that a dependency, not their URL, is the problem.
     stale = [r for r in results
              if r.status == "failed" and looks_stale(r.message)]
-    if stale and updater.manages_own_env():
+    if stale and updater.can_update():
         print(f"\n  {C.grey}that looks like an outdated yt-dlp - "
               f"updating...{C.reset}", file=sys.stderr)
         result = updater.update_now()

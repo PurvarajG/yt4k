@@ -15,9 +15,14 @@ Two triggers, both aimed at never making someone diagnose that themselves:
   yt-dlp, update immediately regardless of the daily clock, so the retry the
   user is about to attempt is the one that works.
 
-Updates only ever touch fetch4k's own venv. If fetch4k is running against a
-system or Homebrew Python, `pip install --upgrade` there would be both rude
-and, under PEP 668, refused - so we detect that and decline.
+Two kinds of install are updated, each by its own package manager:
+
+- **fetch4k's own venv** (the installer): `pip install --upgrade yt-dlp`.
+- **Homebrew** (the formula depends on Homebrew's yt-dlp): `brew upgrade
+  yt-dlp`. pip would be refused there under PEP 668, and would be rude anyway.
+
+Anything else - a distro package, a pipx shim - is somebody else's to
+upgrade, so we detect that and decline.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,6 +42,8 @@ from typing import Callable
 
 CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 UPDATE_TIMEOUT_SECONDS = 120
+# brew refreshes its own formula index before upgrading, which is slower.
+BREW_TIMEOUT_SECONDS = 300
 
 # What an out-of-date yt-dlp looks like from the outside. YouTube answers a
 # request signed with a scheme yt-dlp no longer implements by refusing it, so
@@ -94,6 +102,7 @@ class Updater:
         now: Callable[[], float] = time.time,
         python: str | None = None,
         interval: float = CHECK_INTERVAL_SECONDS,
+        which: Callable[[str], str | None] = shutil.which,
     ) -> None:
         self.state_path = state_path or Path(
             "~/.config/fetch4k/update-state.json").expanduser()
@@ -101,16 +110,39 @@ class Updater:
         self._now = now
         self._python = python or sys.executable
         self._interval = interval
+        self._which = which
 
     # ------------------------------------------------------------ ownership
 
     def manages_own_env(self) -> bool:
-        """True when yt-dlp lives beside our interpreter, i.e. in fetch4k's venv.
-
-        Anything else - a Homebrew yt-dlp, a distro package, a pipx shim - is
-        somebody else's to upgrade, and pip would either refuse or trample it.
-        """
+        """True when yt-dlp lives beside our interpreter, i.e. in fetch4k's venv."""
         return Path(self._python).with_name("yt-dlp").exists()
+
+    def _brew_ytdlp(self) -> str | None:
+        """The Homebrew-installed yt-dlp on PATH, or None.
+
+        Homebrew keeps every formula under a `Cellar` directory, and PATH
+        entries are symlinks into it, so resolving the link is a reliable
+        tell that brew - not pip, not a distro - owns this copy.
+        """
+        found = self._which("yt-dlp")
+        if not found or not self._which("brew"):
+            return None
+        return found if "/Cellar/" in os.path.realpath(found) else None
+
+    def manager(self) -> str | None:
+        """Who upgrades yt-dlp here: "pip", "brew", or None (not ours to touch).
+
+        The venv wins, mirroring tools.find_tool: that copy is the one used.
+        """
+        if self.manages_own_env():
+            return "pip"
+        if self._brew_ytdlp():
+            return "brew"
+        return None
+
+    def can_update(self) -> bool:
+        return self.manager() is not None
 
     # ----------------------------------------------------------------- clock
 
@@ -152,35 +184,45 @@ class Updater:
 
     # ---------------------------------------------------------------- update
 
-    def _version(self) -> str | None:
+    def _version(self, manager: str = "pip") -> str | None:
+        cmd = ([self._brew_ytdlp() or "yt-dlp", "--version"] if manager == "brew"
+               else [self._python, "-m", "yt_dlp", "--version"])
         try:
-            out = self._run([self._python, "-m", "yt_dlp", "--version"],
+            out = self._run(cmd,
                             capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None
         return (out.stdout or "").strip() or None
 
+    def _upgrade_command(self, manager: str) -> tuple[list[str], dict, int]:
+        if manager == "brew":
+            env = {**os.environ, "HOMEBREW_NO_ENV_HINTS": "1",
+                   "HOMEBREW_NO_INSTALL_CLEANUP": "1"}
+            return (["brew", "upgrade", "yt-dlp"], env, BREW_TIMEOUT_SECONDS)
+        return ([self._python, "-m", "pip", "install", "--upgrade", "--quiet",
+                 "--disable-pip-version-check", "yt-dlp"], os.environ.copy(),
+                UPDATE_TIMEOUT_SECONDS)
+
     def update_now(self) -> UpdateResult:
-        """Upgrade yt-dlp in fetch4k's venv, whatever the clock says."""
-        if not self.manages_own_env():
-            return UpdateResult(False, error="yt-dlp isn't managed by fetch4k")
-        before = self._version()
+        """Upgrade yt-dlp with whichever tool installed it, whatever the clock says."""
+        manager = self.manager()
+        if manager is None:
+            return UpdateResult(False, error="yt-dlp isn't managed by fetch4k or Homebrew")
+        before = self._version(manager)
+        cmd, env, timeout = self._upgrade_command(manager)
         try:
-            out = self._run(
-                [self._python, "-m", "pip", "install", "--upgrade",
-                 "--quiet", "--disable-pip-version-check", "yt-dlp"],
-                capture_output=True, text=True, timeout=UPDATE_TIMEOUT_SECONDS,
-            )
+            out = self._run(cmd, capture_output=True, text=True, timeout=timeout,
+                            env=env)
         except (OSError, subprocess.SubprocessError) as error:
             result = UpdateResult(False, before, before, str(error))
             self._mark_checked(result)
             return result
         if out.returncode != 0:
             tail = _last_line(out.stderr or out.stdout or "")
-            result = UpdateResult(False, before, before, tail or "pip failed")
+            result = UpdateResult(False, before, before, tail or f"{manager} failed")
             self._mark_checked(result)
             return result
-        after = self._version()
+        after = self._version(manager)
         result = UpdateResult(bool(after and after != before), before, after)
         self._mark_checked(result)
         return result
@@ -199,7 +241,7 @@ class Updater:
         Returns the thread so tests (and shutdown) can join it; None when
         nothing was due.
         """
-        if not self.due() or not self.manages_own_env():
+        if not self.due() or not self.can_update():
             return None
 
         def work() -> None:

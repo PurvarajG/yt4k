@@ -54,7 +54,7 @@ def _no_real_updates(monkeypatch):
         def check_in_background(self, on_done=None):
             return None
 
-        def manages_own_env(self):
+        def can_update(self):
             return True
 
         def update_now(self):

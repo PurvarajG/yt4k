@@ -242,7 +242,7 @@ YouTube changes how it serves video every few weeks. fetch4k checks for a new yt
 fetch4k --update
 ```
 
-This only updates fetch4k's own copy. A yt-dlp you installed with Homebrew, apt or pipx is left alone.
+This works for both install types: the installer's own copy is upgraded with pip, and a Homebrew install runs `brew upgrade yt-dlp`. A yt-dlp installed some other way (apt, pipx) is left alone.
 
 </details>
 

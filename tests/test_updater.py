@@ -20,7 +20,7 @@ class FakePip:
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(cmd)
-        if "pip" in cmd:
+        if "pip" in cmd or "upgrade" in cmd:
             return subprocess.CompletedProcess(
                 cmd, self._install_returncode, stdout="",
                 stderr=self._install_stderr,
@@ -32,7 +32,7 @@ class FakePip:
 def make(tmp_path, run, now=lambda: 1000.0, owned=True, **kwargs):
     updater = Updater(state_path=tmp_path / "update-state.json", run=run,
                       now=now, python=str(tmp_path / "python3"), **kwargs)
-    updater.manages_own_env = lambda: owned
+    updater.manager = lambda: "pip" if owned else None
     return updater
 
 
@@ -168,3 +168,59 @@ def test_background_check_does_nothing_when_not_due(tmp_path):
     updater.update_now()
 
     assert updater.check_in_background(lambda r: None) is None
+
+
+# ------------------------------------------------------------------- homebrew
+
+def make_brew(tmp_path, run, tap=True, **kwargs):
+    """An Updater whose yt-dlp is a symlink into a fake Homebrew Cellar."""
+    cellar = tmp_path / "Cellar" / "yt-dlp" / "1" / "bin"
+    cellar.mkdir(parents=True)
+    real = cellar / "yt-dlp"
+    real.write_text("")
+    link = tmp_path / "bin" / "yt-dlp"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    paths = {"yt-dlp": str(link), "brew": "/opt/homebrew/bin/brew"}
+    return Updater(state_path=tmp_path / "update-state.json", run=run,
+                   now=lambda: 1000.0, python=str(tmp_path / "python3"),
+                   which=(paths.get if tap else lambda name: None), **kwargs)
+
+
+def test_homebrew_yt_dlp_is_upgraded_with_brew(tmp_path):
+    run = FakePip(["2026.7.4", "2026.8.19"])
+    updater = make_brew(tmp_path, run)
+
+    result = updater.update_now()
+
+    assert updater.manager() == "brew"
+    assert result.changed and result.new_version == "2026.8.19"
+    assert ["brew", "upgrade", "yt-dlp"] in run.calls
+    assert not any("pip" in call for call in run.calls)
+
+
+def test_failed_brew_upgrade_is_reported_not_raised(tmp_path):
+    run = FakePip(["2026.7.4", "2026.7.4"], install_returncode=1,
+                  install_stderr="Error: network is unreachable")
+    result = make_brew(tmp_path, run).update_now()
+
+    assert not result.changed
+    assert "network is unreachable" in result.error
+
+
+def test_a_yt_dlp_outside_the_cellar_is_left_alone(tmp_path):
+    other = tmp_path / "usr" / "bin" / "yt-dlp"
+    other.parent.mkdir(parents=True)
+    other.write_text("")
+    paths = {"yt-dlp": str(other), "brew": "/opt/homebrew/bin/brew"}
+    run = FakePip([])
+    updater = Updater(state_path=tmp_path / "s.json", run=run,
+                      python=str(tmp_path / "python3"), which=paths.get)
+
+    assert updater.manager() is None
+    assert not updater.update_now().changed
+    assert run.calls == []
+
+
+def test_no_brew_means_no_brew_upgrade(tmp_path):
+    assert make_brew(tmp_path, FakePip([]), tap=False).manager() is None
