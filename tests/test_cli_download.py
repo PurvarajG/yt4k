@@ -206,6 +206,23 @@ async def test_failure_shows_retry_and_edit_settings(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stale_ytdlp_failure_triggers_update_without_crashing(tmp_path):
+    plan = make_plan(tmp_path)
+    result = JobResult(url=plan.urls[0], status="failed", output_path=None,
+                       message="HTTP Error 403: Forbidden")
+    runner = ScriptedRunner([], [result])
+    app = make_app(tmp_path, runner)
+    async with app.run_test() as pilot:
+        app.push_screen(DownloadScreen(plan))
+        await pilot.pause()
+        runner.ready.wait(timeout=2)
+        runner.proceed.set()
+        await pilot.pause(0.5)
+        status = str(app.screen.query_one("#download-status").content)
+        assert "disabled in tests" in status or "yt-dlp" in status
+
+
+@pytest.mark.asyncio
 async def test_first_ctrl_c_cancels(tmp_path):
     plan = make_plan(tmp_path)
     step = ProgressEvent(item_index=0, item_count=1, stage=JobStage.DOWNLOADING,

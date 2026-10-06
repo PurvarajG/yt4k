@@ -152,7 +152,7 @@ class DownloadScreen(Screen):
         """A 403 or a failed challenge almost always means yt-dlp fell behind
         YouTube. Fix it here, while the user is looking at the Retry button,
         rather than leaving them to discover it."""
-        self.call_from_thread(
+        self.app.call_from_thread(
             self.query_one("#download-status", Static).update,
             "That looks like an outdated yt-dlp - updating...",
         )
@@ -165,7 +165,7 @@ class DownloadScreen(Screen):
             message = result.describe()
         if result is not None and result.changed:
             message = f"{message} - press Retry"
-        self.call_from_thread(
+        self.app.call_from_thread(
             self.query_one("#download-status", Static).update, message,
         )
 
