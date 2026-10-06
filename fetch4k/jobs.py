@@ -100,6 +100,52 @@ def _title_stem(src: Path, metadata: MediaMetadata) -> str:
     return stem.strip() or (metadata.title or "video")
 
 
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov"}
+AUDIO_EXTENSIONS = {".m4a", ".mp3", ".opus", ".ogg", ".flac", ".wav", ".aac", ".webm"}
+
+
+def _fold(text: str) -> str:
+    """Letters and digits only, lowercased.
+
+    yt-dlp swaps characters it can't put in a filename (a "?" becomes a
+    full-width one, "/" becomes a lookalike), so a title and the file saved
+    from it only agree once the punctuation is stripped from both.
+    """
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+def find_existing(out_dir: Path, metadata: MediaMetadata, prefix: str,
+                  tag: str, mode: str) -> Path | None:
+    """The finished file a previous run already saved for this item, if any.
+
+    Match on the playlist position prefix plus the title, so a playlist whose
+    order or contents have shifted re-downloads rather than wrongly skipping.
+    Hidden files are ignored (that is where fetch4k keeps in-progress work),
+    as are empty files.
+    """
+    title = _fold(metadata.title or "")
+    if not title or not out_dir.is_dir():
+        return None
+    wanted = title + _fold(f" ({tag})") if tag else title
+    extensions = AUDIO_EXTENSIONS if mode == "audio" else VIDEO_EXTENSIONS
+    for candidate in sorted(out_dir.iterdir()):
+        name = candidate.name
+        if (name.startswith(".") or candidate.suffix.lower() not in extensions
+                or not name.startswith(prefix) or not candidate.is_file()):
+            continue
+        try:
+            if candidate.stat().st_size == 0:
+                continue
+        except OSError:
+            continue
+        stem = _fold(candidate.stem[len(prefix):])
+        # yt-dlp cuts very long titles to fit the filesystem, so a long title
+        # may only match as a prefix of itself.
+        if stem == wanted or (len(stem) >= 100 and wanted.startswith(stem)):
+            return candidate
+    return None
+
+
 def _unique(path: Path) -> Path:
     if not path.exists():
         return path
@@ -125,7 +171,9 @@ class JobRunner:
         killpg: Callable[[int, int], None] | None = None,
         grace_period: float = GRACE_PERIOD_SECONDS,
         poll_interval: float = POLL_INTERVAL_SECONDS,
+        skip_existing: bool = True,
     ) -> None:
+        self.skip_existing = skip_existing
         self._popen = popen
         self._run = run
         self._which = which
@@ -531,6 +579,19 @@ class JobRunner:
         self._run_ffmpeg(cmd, duration, item_index, item_count,
                           JobStage.ENCODING, emit, cancel)
 
+    @staticmethod
+    def _write_atomically(workdir: Path, final: Path,
+                          write: Callable[[Path], None]) -> None:
+        """Encode into the scratch folder and move into place only when done.
+
+        ffmpeg writes its output as it goes, so encoding straight to `final`
+        leaves a truncated file behind on a crash or Ctrl+C - which would then
+        look like a finished download to the skip-existing check.
+        """
+        partial = workdir / f"output{final.suffix}"
+        write(partial)
+        shutil.move(str(partial), final)
+
     # --------------------------------------------------------------- jobs
 
     def _video_job(self, url: str, workdir: Path, out_dir: Path, plan: JobPlan,
@@ -569,8 +630,9 @@ class JobRunner:
         final = _unique(out_dir / f"{stem}.{ext}")
 
         if target and vcodec != target:
-            self._transcode_video(src, final, target, plan, duration,
-                                   item_index, item_count, emit, cancel)
+            self._write_atomically(workdir, final, lambda out: self._transcode_video(
+                src, out, target, plan, duration, item_index, item_count,
+                emit, cancel))
             if s.keep_source:
                 prefix = plan.items[item_index].output_prefix
                 shutil.move(str(src), _unique(out_dir / f"{prefix}{src.name}"))
@@ -578,9 +640,9 @@ class JobRunner:
             shutil.move(str(src), final)
         else:
             needs_aac = ext == "mp4" and acodec not in MP4_SAFE_AUDIO
-            self._remux(src, final, duration, item_index, item_count, emit,
-                        cancel, audio="aac" if needs_aac else "copy",
-                        bitrate=s.audio_bitrate)
+            self._write_atomically(workdir, final, lambda out: self._remux(
+                src, out, duration, item_index, item_count, emit, cancel,
+                audio="aac" if needs_aac else "copy", bitrate=s.audio_bitrate))
         return final
 
     def _audio_job(self, url: str, workdir: Path, out_dir: Path, plan: JobPlan,
@@ -611,8 +673,9 @@ class JobRunner:
                              f"audio format")
 
         final = _unique(out_dir / f"{stem}.{ext}")
-        self._convert_audio(src, final, codec, s.audio_bitrate, lossy, duration,
-                            item_index, item_count, emit, cancel)
+        self._write_atomically(workdir, final, lambda out: self._convert_audio(
+            src, out, codec, s.audio_bitrate, lossy, duration, item_index,
+            item_count, emit, cancel))
         if s.keep_source:
             prefix = plan.items[item_index].output_prefix
             shutil.move(str(src), _unique(out_dir / f"{prefix}{src.name}"))
@@ -653,6 +716,16 @@ class JobRunner:
         out_dir.mkdir(parents=True, exist_ok=True)
         plan.destination.mkdir(parents=True, exist_ok=True)
         images = (metadata.raw or {}).get(pinterest.IMAGES_KEY)
+        if self.skip_existing and not images:
+            tag = clip_tag(*cut, cut[1] is None) if cut else ""
+            existing = find_existing(out_dir, metadata, item.output_prefix, tag,
+                                     plan.settings.mode)
+            if existing:
+                emit(ProgressEvent(item_index=item_index, item_count=item_count,
+                                    stage=JobStage.FINALIZING, fraction=1.0,
+                                    message=existing.name))
+                return JobResult(url=url, status="success", output_path=existing,
+                                  message=f"Already downloaded - {existing.name}")
         if images:
             return self._image_job(item, images, out_dir, item_index,
                                    item_count, emit)

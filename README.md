@@ -116,6 +116,7 @@ fetch4k URL --audio wav
 fetch4k PLAYLIST_URL             # every entry, in order
 fetch4k URL -o ~/Desktop/clips   # save somewhere else, just this once
 fetch4k URL --explain            # show what it understood, download nothing
+fetch4k PLAYLIST_URL --redownload  # fetch again even if the files already exist
 fetch4k --update                 # refresh yt-dlp now
 ```
 
@@ -168,7 +169,7 @@ fetch4k handles any link [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob
 
 Paste a YouTube playlist link and every available video becomes its own job, using the same quality, clip and format settings. The review screen shows the playlist name, how many videos it has, and any that are already known to be unavailable. A private or deleted video fails on its own and the rest keep going.
 
-Files go into a folder named after the playlist and numbered in playlist order (`001 - …`), even when downloads finish out of order. **Retry** only re-runs the videos that failed.
+Files go into a folder named after the playlist and numbered in playlist order (`001 - …`), even when downloads finish out of order. **Retry** only re-runs the videos that failed. Paste the same playlist again later and anything already in its folder is skipped, so only the videos that never finished are downloaded (add `--redownload` on the command line to fetch everything again).
 
 If a link has both a video and a `list=` in it, the workbench asks which one you mean. For a one-shot download, add `--video` or `--playlist`.
 

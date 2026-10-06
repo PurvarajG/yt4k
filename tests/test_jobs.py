@@ -105,7 +105,15 @@ def _download_produces_file(monkeypatch):
         return original_fetch(self, url, workdir, fmt, merge, item_index,
                                item_count, stage, emit, cancel, section, precise)
 
+    original_ffmpeg = jobs_module.JobRunner._run_ffmpeg
+
+    def ffmpeg_writes_output(self, cmd, *args, **kwargs):
+        # Real ffmpeg creates its output file; the fake process doesn't.
+        Path(cmd[-1]).write_bytes(b"0" * 32)
+        return original_ffmpeg(self, cmd, *args, **kwargs)
+
     monkeypatch.setattr(jobs_module.JobRunner, "_fetch", patched)
+    monkeypatch.setattr(jobs_module.JobRunner, "_run_ffmpeg", ffmpeg_writes_output)
     yield
 
 
@@ -562,3 +570,159 @@ def test_title_stem_drops_clip_marker_and_unknown_ids(tmp_path):
         == "Song [Official Video]"
     # A title that sanitizes away entirely still yields a usable name.
     assert _title_stem(tmp_path / " [3TEnuDVFYUY].mkv", _titled()) == "Mara Hrudiya May"
+
+
+# ------------------------------------------------------------- skip existing
+
+def _playlist_item(position, title, count=11):
+    return JobItem(url=f"https://youtu.be/{position}", metadata=_titled(title=title),
+                   playlist_title="A playlist", playlist_folder="A playlist",
+                   playlist_position=position, playlist_count=count)
+
+
+def _skip_runner(monkeypatch, fetched, titles=None):
+    """`titles` maps url -> the title yt-dlp would name the file after."""
+    from fetch4k import jobs as jobs_module
+    titles = titles or {}
+
+    def fetch(self, url, workdir, *args, **kwargs):
+        fetched.append(url)
+        path = workdir / f"{titles.get(url, 'Mara Hrudiya May')} [3TEnuDVFYUY].mkv"
+        path.write_bytes(b"0" * 32)
+        return path
+
+    monkeypatch.setattr(jobs_module.JobRunner, "_fetch", fetch)
+    runner = FakeRunner([FakeProc([])]).build()
+    runner.probe = lambda path: {"duration": 10.0}
+    return runner
+
+
+def _mkv_plan(tmp_path, items, **settings):
+    return build_job_plan((), tmp_path, Settings(codec="source", container="mkv",
+                                                 **settings), None, (), (),
+                          items=tuple(items))
+
+
+def test_finished_playlist_items_are_skipped_and_the_rest_downloaded(tmp_path, monkeypatch):
+    folder = tmp_path / "A playlist"
+    folder.mkdir()
+    (folder / "001 - First.mkv").write_bytes(b"x" * 10)
+    fetched = []
+    runner = _skip_runner(monkeypatch, fetched, {"https://youtu.be/2": "Second"})
+    plan = _mkv_plan(tmp_path, [_playlist_item(1, "First"), _playlist_item(2, "Second")])
+
+    first, second = runner.run(plan, lambda e: None, CancellationToken())
+
+    assert first.status == "success" and "Already downloaded" in first.message
+    assert first.output_path == folder / "001 - First.mkv"
+    assert fetched == ["https://youtu.be/2"]
+    assert second.output_path.name == "002 - Second.mkv"
+    assert not (folder / "001 - First (2).mkv").exists()
+
+
+def test_a_different_title_at_the_same_position_is_not_skipped(tmp_path, monkeypatch):
+    folder = tmp_path / "A playlist"
+    folder.mkdir()
+    (folder / "001 - Old video.mkv").write_bytes(b"x" * 10)
+    fetched = []
+    runner = _skip_runner(monkeypatch, fetched)
+
+    runner.run(_mkv_plan(tmp_path, [_playlist_item(1, "New video")]),
+               lambda e: None, CancellationToken())
+
+    assert fetched == ["https://youtu.be/1"]
+
+
+def test_title_punctuation_that_ytdlp_rewrites_still_matches(tmp_path, monkeypatch):
+    folder = tmp_path / "A playlist"
+    folder.mkdir()
+    (folder / "001 - Why？ A⧸B test.mkv").write_bytes(b"x" * 10)
+    fetched = []
+    runner = _skip_runner(monkeypatch, fetched)
+
+    runner.run(_mkv_plan(tmp_path, [_playlist_item(1, "Why? A/B test")]),
+               lambda e: None, CancellationToken())
+
+    assert fetched == []
+
+
+def test_empty_and_hidden_files_do_not_count_as_downloaded(tmp_path, monkeypatch):
+    folder = tmp_path / "A playlist"
+    folder.mkdir()
+    (folder / "001 - First.mkv").write_bytes(b"")
+    (folder / ".001 - First.mkv").write_bytes(b"x" * 10)
+    fetched = []
+    runner = _skip_runner(monkeypatch, fetched)
+
+    runner.run(_mkv_plan(tmp_path, [_playlist_item(1, "First")]),
+               lambda e: None, CancellationToken())
+
+    assert fetched == ["https://youtu.be/1"]
+
+
+def test_a_plain_download_matches_by_title_in_the_destination(tmp_path, monkeypatch):
+    (tmp_path / "Mara Hrudiya May.mkv").write_bytes(b"x" * 10)
+    fetched = []
+    runner = _skip_runner(monkeypatch, fetched)
+    plan = _mkv_plan(tmp_path, [JobItem(url="https://youtu.be/a", metadata=_titled())])
+
+    result = runner.run(plan, lambda e: None, CancellationToken())[0]
+
+    assert fetched == []
+    assert result.output_path == tmp_path / "Mara Hrudiya May.mkv"
+
+
+def test_audio_mode_does_not_treat_a_video_file_as_done(tmp_path, monkeypatch):
+    (tmp_path / "Mara Hrudiya May.mp4").write_bytes(b"x" * 10)
+    runner = _skip_runner(monkeypatch, [])
+    from fetch4k.jobs import find_existing
+
+    assert find_existing(tmp_path, _titled(), "", "", "audio") is None
+    assert find_existing(tmp_path, _titled(), "", "", "video") is not None
+
+
+def test_a_clipped_request_is_not_satisfied_by_the_full_video(tmp_path):
+    from fetch4k.jobs import find_existing
+
+    (tmp_path / "Mara Hrudiya May.mkv").write_bytes(b"x" * 10)
+
+    assert find_existing(tmp_path, _titled(), "", "1:20-3:45", "video") is None
+
+
+def test_skip_existing_can_be_turned_off(tmp_path, monkeypatch):
+    (tmp_path / "Mara Hrudiya May.mkv").write_bytes(b"x" * 10)
+    fetched = []
+    runner = _skip_runner(monkeypatch, fetched)
+    runner.skip_existing = False
+    plan = _mkv_plan(tmp_path, [JobItem(url="https://youtu.be/a", metadata=_titled())])
+
+    result = runner.run(plan, lambda e: None, CancellationToken())[0]
+
+    assert fetched == ["https://youtu.be/a"]
+    assert result.output_path.name == "Mara Hrudiya May (2).mkv"
+
+
+def test_an_interrupted_encode_leaves_no_file_to_mistake_for_done(tmp_path, monkeypatch):
+    from fetch4k import jobs as jobs_module
+
+    def fetch(self, url, workdir, *args, **kwargs):
+        path = workdir / "video [id].mkv"
+        path.write_bytes(b"0" * 32)
+        return path
+
+    def dying_ffmpeg(self, cmd, *args, **kwargs):
+        Path(cmd[-1]).write_bytes(b"half")   # ffmpeg got partway, then was killed
+        raise jobs_module.Cancelled()
+
+    monkeypatch.setattr(jobs_module.JobRunner, "_fetch", fetch)
+    monkeypatch.setattr(jobs_module.JobRunner, "_run_ffmpeg", dying_ffmpeg)
+    runner = FakeRunner([FakeProc([])]).build()
+    runner.probe = lambda path: {"duration": 10.0, "vcodec": "vp9", "acodec": "opus"}
+    plan = build_job_plan((), tmp_path, Settings(codec="source", container="mp4"),
+                          None, (), (),
+                          items=(JobItem(url="https://youtu.be/a", metadata=_titled()),))
+
+    result = runner.run(plan, lambda e: None, CancellationToken())[0]
+
+    assert result.status == "cancelled"
+    assert [p.name for p in tmp_path.iterdir() if not p.name.startswith(".")] == []

@@ -273,10 +273,10 @@ def _present_progress(bars: dict, event) -> None:
 
 
 def run_one_shot(urls: list[str], settings: "Settings", clip, destination: Path,
-                 scopes: tuple[URLKind, ...]) -> None:
+                 scopes: tuple[URLKind, ...], redownload: bool = False) -> None:
     """Execute one or more URLs through the shared job engine, printing a
     plain-text summary per file. This is the only one-shot progress printer."""
-    runner = JobRunner()
+    runner = JobRunner(skip_existing=not redownload)
     updater = Updater()
     updater.check_in_background()
 
@@ -411,6 +411,9 @@ def main() -> None:
                    help="hardware encoder (much faster, slightly bigger)")
     p.add_argument("--keep-source", action="store_true",
                    help="also keep the original downloaded file")
+    p.add_argument("--redownload", action="store_true",
+                   help="download again even if the file is already in the "
+                        "destination folder (the default is to skip it)")
     p.add_argument("--update", action="store_true",
                    help="update yt-dlp now and exit (fetch4k also does this "
                         "daily on its own)")
@@ -501,7 +504,8 @@ def main() -> None:
         run_interactive()
         return
 
-    run_one_shot(urls, settings, clip, active_dir(s), tuple(scopes))
+    run_one_shot(urls, settings, clip, active_dir(s), tuple(scopes),
+                 redownload=args.redownload)
 
 
 if __name__ == "__main__":
